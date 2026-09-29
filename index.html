@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control de Morosidad</title>
+    <link rel="stylesheet" href="style.css?v=13">
+    <!-- Cargar SheetJS para procesar Excel -->
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Control de Morosidad y Tramos de Visita</h1>
+        </header>
+
+        <section class="upload-section">
+            <div class="file-input-wrapper" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap;">
+                <label for="excel-file" class="file-label">
+                    <span id="file-name">Subir archivo Excel (.xlsx, .xls)</span>
+                </label>
+                <input type="file" id="excel-file" accept=".xlsx, .xls" style="display:none;" />
+                <button id="btn-export" class="file-label" style="background-color: #27ae60; border: none; display: none;">💾 Descargar Excel Actualizado</button>
+            </div>
+            
+            <div class="instructions">
+                <p><strong>Nota:</strong> Todos los cambios que hagas se guardan automáticamente en tu navegador. Si cierras la pestaña por error, no perderás los datos.</p>
+            </div>
+        </section>
+
+        <section class="summary-section" id="summary-section" style="display: none;">
+            <div class="summary-card">
+                <h3>Total Adeudado</h3>
+                <p id="total-monto">$0.00</p>
+            </div>
+            <div class="summary-card">
+                <h3>Visitas Tramo 1-8 días</h3>
+                <p id="total-tramo-1">0</p>
+            </div>
+            <div class="summary-card">
+                <h3>Visitas Tramo 9-30 días</h3>
+                <p id="total-tramo-2">0</p>
+            </div>
+            <div class="summary-card">
+                <h3>Otros tramos (>30 días)</h3>
+                <p id="total-tramo-3">0</p>
+            </div>
+        </section>
+
+        <section class="table-section">
+            <div style="overflow-x:auto;">
+                <table id="results-table">
+                    <thead>
+                        <tr>
+                            <th>DNI</th>
+                            <th>Cliente</th>
+                            <th>Teléfono</th>
+                            <th>Producto</th>
+                            <th>N° Cuotas</th>
+                            <th>Vencimiento</th>
+                            <th>Días Mora Actual</th>
+                            <th>Días Mora Cierre</th>
+                            <th>Tramo de Visita</th>
+                            <th>Compromiso de Pago</th>
+                            <th>Monto Adeudado</th>
+                            <th>Carta</th>
+                            <th>Estado</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body">
+                        <tr>
+                            <td colspan="13" class="empty-state">No hay datos para mostrar. Sube un archivo Excel para comenzar.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+    <script src="app.js?v=13"></script>
+</body>
+</html>

@@ -1,0 +1,205 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body {
+    background-color: #f5f7fa;
+    color: #333;
+    padding: 20px;
+}
+
+.container {
+    max-width: 100%;
+    margin: 0 auto;
+    background-color: #fff;
+    padding: 15px;
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+h1 {
+    color: #2c3e50;
+    font-size: 2.2rem;
+}
+
+.upload-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 30px;
+    padding: 20px;
+    border: 2px dashed #bdc3c7;
+    border-radius: 8px;
+    background-color: #f9fbfd;
+}
+
+.file-input-wrapper {
+    margin-bottom: 15px;
+}
+
+#excel-file {
+    display: none;
+}
+
+.file-label {
+    display: inline-block;
+    padding: 12px 24px;
+    background-color: #3498db;
+    color: white;
+    font-weight: bold;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.file-label:hover {
+    background-color: #2980b9;
+}
+
+.instructions {
+    text-align: center;
+    color: #7f8c8d;
+    font-size: 0.9rem;
+    max-width: 600px;
+}
+
+.summary-section {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 30px;
+    gap: 15px;
+}
+
+.summary-card {
+    flex: 1;
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    border-left: 5px solid #3498db;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    text-align: center;
+}
+
+.summary-card h3 {
+    font-size: 1rem;
+    color: #7f8c8d;
+    margin-bottom: 10px;
+}
+
+.summary-card p {
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: #2c3e50;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+    table-layout: auto;
+}
+
+thead th {
+    background-color: #2c3e50;
+    color: white;
+    padding: 10px 4px;
+    text-align: left;
+    font-size: 0.85rem;
+}
+
+tbody td {
+    padding: 8px 4px;
+    border-bottom: 1px solid #ecf0f1;
+    font-size: 0.85rem;
+    word-break: break-word;
+}
+
+tbody tr:hover {
+    background-color: #f9f9f9;
+}
+
+.empty-state {
+    text-align: center;
+    color: #95a5a6;
+    padding: 40px !important;
+}
+
+.tramo-1 {
+    color: #e67e22; /* Naranja */
+    font-weight: bold;
+}
+
+.tramo-2 {
+    color: #c0392b; /* Rojo */
+    font-weight: bold;
+}
+
+.tramo-otro {
+    color: #7f8c8d; /* Gris */
+}
+
+.tramo-al-dia {
+    color: #27ae60; /* Verde */
+}
+
+.compromiso-input {
+    width: 100%;
+    min-width: 80px;
+    padding: 6px;
+    border: 1px solid #bdc3c7;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    transition: all 0.3s;
+}
+
+.compromiso-input:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 5px rgba(52, 152, 219, 0.5);
+}
+
+/* Estilos para el estado del pago */
+.status-select {
+    padding: 6px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    font-size: 0.9em;
+    cursor: pointer;
+}
+
+.status-select:focus {
+    outline: none;
+    border-color: #27ae60;
+}
+
+tr.row-cancelo {
+    background-color: #d5f5e3 !important;
+    transition: background-color 0.3s ease;
+}
+
+tr.row-cancelo td {
+    color: #27ae60;
+    opacity: 0.85;
+}
+
+.carta-select {
+    padding: 6px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+    font-size: 0.9em;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.carta-select:focus {
+    outline: none;
+    border-color: #3498db;
+}
