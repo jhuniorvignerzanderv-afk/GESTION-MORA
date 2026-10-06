@@ -1,4 +1,4 @@
-﻿const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8FX1qyTUnQKP0MZ3mEH5uU_tmqBSIRdlyeqRxhhR_SBPOn6io6ROg64gWtvkVMAvz/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8FX1qyTUnQKP0MZ3mEH5uU_tmqBSIRdlyeqRxhhR_SBPOn6io6ROg64gWtvkVMAvz/exec";
 
 let gestionesGlobal = {};
 
@@ -29,16 +29,20 @@ function handleFile(e) {
         statusEl.textContent = "Subiendo a la nube (esto puede tardar unos segundos)...";
         
         try {
+            // Actualizar la interfaz inmediatamente con los datos locales
+            processData(rows);
+
             await fetch(SCRIPT_URL, {
                 method: "POST",
                 mode: "no-cors",
                 body: JSON.stringify({ action: "upload_data", data: rows })
             });
             
-            statusEl.textContent = "¡Base de datos enviada!";
+            statusEl.textContent = "¡Base de datos enviada y actualizada!";
             statusEl.style.color = "#27ae60";
             
-            setTimeout(syncData, 2000);
+            // Sincronizar de todos modos para obtener posibles gestiones nuevas
+            setTimeout(syncData, 3000);
         } catch(err) {
             console.error(err);
             statusEl.textContent = "Error al subir a la nube.";
@@ -54,7 +58,8 @@ async function syncData() {
     statusEl.style.color = "#f39c12";
 
     try {
-        const response = await fetch(SCRIPT_URL);
+        const urlNoCache = SCRIPT_URL + "?t=" + new Date().getTime();
+        const response = await fetch(urlNoCache);
         const json = await response.json();
         
         gestionesGlobal = json.gestiones || {};
