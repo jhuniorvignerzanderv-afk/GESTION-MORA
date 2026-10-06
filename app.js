@@ -8,6 +8,46 @@ document.addEventListener("DOMContentLoaded", () => {
     syncData();
 });
 
+function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const statusEl = document.getElementById("sync-status");
+    statusEl.textContent = "Leyendo Excel...";
+    statusEl.style.color = "#f39c12";
+
+    const reader = new FileReader();
+    reader.onload = async function (e) {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array", cellDates: true });
+
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+
+        let rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+        
+        statusEl.textContent = "Subiendo a la nube (esto puede tardar unos segundos)...";
+        
+        try {
+            await fetch(SCRIPT_URL, {
+                method: "POST",
+                mode: "no-cors",
+                body: JSON.stringify({ action: "upload_data", data: rows })
+            });
+            
+            statusEl.textContent = "¡Base de datos enviada!";
+            statusEl.style.color = "#27ae60";
+            
+            setTimeout(syncData, 2000);
+        } catch(err) {
+            console.error(err);
+            statusEl.textContent = "Error al subir a la nube.";
+            statusEl.style.color = "#e74c3c";
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+
 async function syncData() {
     const statusEl = document.getElementById("sync-status");
     statusEl.textContent = "Sincronizando...";
@@ -57,108 +97,59 @@ async function updateGestionEnNube(dni, compromiso, carta1, carta2, estado) {
     }
 }
 
-
-function handleFile(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const statusEl = document.getElementById("sync-status");
-    statusEl.textContent = "Leyendo Excel...";
-    statusEl.style.color = "#f39c12";
-
-    const reader = new FileReader();
-    reader.onload = async function (e) {
-        const data = new Uint8Array(e.target.result);
-        const workbook = XLSX.read(data, { type: "array", cellDates: true });
-
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-
-        let rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
-        
-        statusEl.textContent = "Subiendo a la nube (esto puede tardar unos segundos)...";
-        
-        try {
-            await fetch(SCRIPT_URL, {
-                method: "POST",
-                mode: "no-cors",
-                body: JSON.stringify({ action: "upload_data", data: rows })
-            });
-            
-            statusEl.textContent = "¡Base de datos enviada!";
-            statusEl.style.color = "#27ae60";
-            
-            // Esperar 2 segundos para que Google Sheets procese, luego descargar
-            setTimeout(syncData, 2000);
-        } catch(err) {
-            console.error(err);
-            statusEl.textContent = "Error al subir a la nube.";
-            statusEl.style.color = "#e74c3c";
-        }
-    };
-    reader.readAsArrayBuffer(file);
-}
-
 function processData(rows) {
     if (rows.length === 0) {
-        alert("El archivo parece estar vacÃ­o.");
+        alert("El archivo parece estar vacío.");
         return;
     }
 
-    const tableBody = document.getElementById('table-body');
-    tableBody.innerHTML = '';
+    const tableBody = document.getElementById("table-body");
+    tableBody.innerHTML = "";
 
-    // Buscar la fila de encabezados (buscamos NOMBRE_CLIENTE o la fila con mÃ¡s columnas llenas)
     let headerRowIndex = 0;
     for (let i = 0; i < Math.min(rows.length, 20); i++) {
+        if(!Array.isArray(rows[i])) continue;
         const rowStrings = rows[i].map(c => String(c).toUpperCase());
-        if (rowStrings.some(cell => cell.includes('NOMBRE_CLIENTE') || cell.includes('CLIENTE'))) {
+        if (rowStrings.some(cell => cell.includes("NOMBRE_CLIENTE") || cell.includes("CLIENTE"))) {
             headerRowIndex = i;
             break;
         }
     }
 
-    const headers = rows[headerRowIndex].map(h => String(h).toLowerCase());
+    const headers = rows[headerRowIndex].map(h => String(h).toLowerCase().trim());
     const dataRows = rows.slice(headerRowIndex + 1);
 
-    // Limpiar encabezados de espacios extra
-    const cleanHeaders = headers.map(h => h.trim());
-
-    // Encontrar Ã­ndices de columnas exactas usando los nombres que nos dio el usuario
     const findExact = (exactNames) => {
-        return cleanHeaders.findIndex(h => exactNames.includes(h));
+        return headers.findIndex(h => exactNames.includes(h));
     };
 
-    let idxCliente = findExact(['nombre_cliente']);
-    let idxVencimiento = findExact(['fecha compromiso']); // O ajustarlo al que uses para vencimiento
-    let idxMonto = findExact(['saldo inicial']);
-    let idxCompromiso = findExact(['compromiso']);
-    let idxAsesor = findExact(['oficial negocios actual']);
-    let idxProceso = findExact(['fecha de proceso', 'proceso']); 
-    let idxDiasMora = findExact(['dias de mora actual', 'dÃ­as mora actual']);
-    let idxDiasMoraCierre = findExact(['dias de mora al cierre', 'dÃ­as mora cierre']);
-    let idxDni = findExact(['numero_documento']);
-    let idxCelular = findExact(['celular_3']);
-    let idxAmortizacion = findExact(['amortizacion']);
-    let idxProducto = findExact(['producto_trt']);
-    let idxCuotas = findExact(['nro cuotas']);
-    let idxAgencia = findExact(['agencia']);
+    let idxCliente = findExact(["nombre_cliente", "cliente"]);
+    let idxVencimiento = findExact(["fecha compromiso", "vencimiento"]); 
+    let idxMonto = findExact(["saldo inicial", "monto adeudado"]);
+    let idxCompromiso = findExact(["compromiso", "compromiso de pago"]);
+    let idxAsesor = findExact(["oficial negocios actual", "asesor"]);
+    let idxProceso = findExact(["fecha de proceso", "proceso"]); 
+    let idxDiasMora = findExact(["dias de mora actual", "días mora actual", "das mora actual"]);
+    let idxDiasMoraCierre = findExact(["dias de mora al cierre", "días mora cierre", "das mora cierre"]);
+    let idxDni = findExact(["numero_documento", "dni"]);
+    let idxCelular = findExact(["celular_3", "telefono", "celular"]);
+    let idxAmortizacion = findExact(["amortizacion"]);
+    let idxProducto = findExact(["producto_trt", "producto"]);
+    let idxCuotas = findExact(["nro cuotas", "cuotas"]);
+    let idxAgencia = findExact(["agencia"]);
 
-    // Fallbacks
     if (idxCliente === -1) idxCliente = 0;
     if (idxVencimiento === -1) idxVencimiento = 1;
     if (idxMonto === -1) idxMonto = 2;
 
-    // Filtrar por asesor y por agencia
-    let datosFiltrados = dataRows;
+    let datosFiltrados = dataRows.filter(row => row.length > 0 && row.some(cell => cell !== ""));
+    
     if (idxAsesor !== -1 || idxAgencia !== -1) {
-        datosFiltrados = dataRows.filter(row => {
-            const asesor = idxAsesor !== -1 ? String(row[idxAsesor] || '').toUpperCase() : '';
-            const agencia = idxAgencia !== -1 ? String(row[idxAgencia] || '').toUpperCase() : '';
-            
-            const matchAsesor = idxAsesor === -1 || (asesor.includes('JHUNIOR') && asesor.includes('VARGAS'));
-            const matchAgencia = idxAgencia === -1 || agencia.includes('NORTE');
-            
+        datosFiltrados = datosFiltrados.filter(row => {
+            const asesor = idxAsesor !== -1 ? String(row[idxAsesor] || "").toUpperCase() : "";
+            const agencia = idxAgencia !== -1 ? String(row[idxAgencia] || "").toUpperCase() : "";
+            const matchAsesor = idxAsesor === -1 || (asesor.includes("JHUNIOR") && asesor.includes("VARGAS"));
+            const matchAgencia = idxAgencia === -1 || agencia.includes("NORTE");
             return matchAsesor && matchAgencia;
         });
     }
@@ -168,144 +159,90 @@ function processData(rows) {
     let tramo2Count = 0; 
     let tramo3Count = 0; 
 
-    // Si no hay Fecha de Proceso, usar por defecto el Ãºltimo dÃ­a del mes anterior
     const fechaActual = new Date();
     const fechaFallback = new Date(fechaActual.getFullYear(), fechaActual.getMonth(), 0);
     fechaFallback.setHours(0,0,0,0);
 
-    // Filtrar filas vacÃ­as
-    datosFiltrados = datosFiltrados.filter(row => row.length > 0 && row.some(cell => cell !== ""));
-
     datosFiltrados.forEach(row => {
-        const dni = idxDni !== -1 ? (row[idxDni] || '-') : '-';
-        const cliente = row[idxCliente] || '-';
-        const celular = idxCelular !== -1 ? (row[idxCelular] || '-') : '-';
-        const producto = idxProducto !== -1 ? (row[idxProducto] || '-') : '-';
-        const cuotas = idxCuotas !== -1 ? (row[idxCuotas] || '-') : '-';
-        let vencimiento = row[idxVencimiento];
+        const dni = idxDni !== -1 ? (row[idxDni] || "-") : "-";
+        const cliente = row[idxCliente] || "-";
+        const celular = idxCelular !== -1 ? (row[idxCelular] || "-") : "-";
+        const producto = idxProducto !== -1 ? (row[idxProducto] || "-") : "-";
+        const cuotas = idxCuotas !== -1 ? (row[idxCuotas] || "-") : "-";
         let procesoVal = idxProceso !== -1 ? row[idxProceso] : null;
-        const compromiso = idxCompromiso !== -1 ? (row[idxCompromiso] || '-') : '-';
+        const compromiso = idxCompromiso !== -1 ? (row[idxCompromiso] || "-") : "-";
         
-        let montoRaw = row[idxMonto];
-        let montoOriginal = 0;
-        if (typeof montoRaw === 'number') {
-            montoOriginal = montoRaw;
-        } else if (typeof montoRaw === 'string') {
-            montoOriginal = parseFloat(montoRaw.replace(/[^0-9.-]+/g,"")) || 0;
-        }
+        let montoOriginal = parseFloat(String(row[idxMonto]).replace(/[^0-9.-]+/g,"")) || 0;
+        let amortizacion = idxAmortizacion !== -1 ? (parseFloat(String(row[idxAmortizacion]).replace(/[^0-9.-]+/g,"")) || 0) : 0;
         
-        let monto = montoOriginal;
-
-        // Restar AmortizaciÃ³n
-        let amortizacionRaw = idxAmortizacion !== -1 ? row[idxAmortizacion] : 0;
-        let amortizacion = 0;
-        if (typeof amortizacionRaw === 'number') {
-            amortizacion = amortizacionRaw;
-        } else if (typeof amortizacionRaw === 'string') {
-            amortizacion = parseFloat(amortizacionRaw.replace(/[^0-9.-]+/g,"")) || 0;
-        }
-        
-        monto = monto - amortizacion;
-        if (monto < 0) monto = 0; // Evitar deudas negativas
-        
+        let monto = montoOriginal - amortizacion;
+        if (monto < 0) monto = 0; 
         totalMonto += monto;
         
-        let montoStyle = "";
-        let montoHTML = "";
+        let montoStyle = "text-align: right;";
+        let montoHTML = `$${monto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
         if (amortizacion > 0) {
             montoStyle = "background-color: #eafaf1; border-radius: 4px; padding: 5px; text-align: right;"; 
             montoHTML = `
-                <div style="font-size: 0.8em; color: #7f8c8d; text-decoration: line-through;">$${montoOriginal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-                <div style="font-size: 0.85em; color: #e74c3c; margin-bottom: 2px;">- $${amortizacion.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-                <div style="color: #27ae60; font-weight: bold; font-size: 1.05em;">$${monto.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                <div style="font-size: 0.8em; color: #7f8c8d; text-decoration: line-through;">$${montoOriginal.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                <div style="font-size: 0.85em; color: #e74c3c; margin-bottom: 2px;">- $${amortizacion.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+                <div style="color: #27ae60; font-weight: bold; font-size: 1.05em;">$${monto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
             `;
-        } else {
-            montoStyle = "text-align: right;";
-            montoHTML = `$${monto.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
         }
 
         let diasAtrasoActual = 0;
-        let diasAtrasoCierre = 0; // Nuevo
-        let tramoStr = "Al dÃ­a";
+        let diasAtrasoCierre = 0; 
+        let tramoStr = "Al día";
         let tramoClass = "tramo-al-dia";
         let fechaMostrada = "-";
 
-        // Determinar la fecha base (Fecha de Proceso)
         let fechaBase = new Date(fechaFallback);
         if (procesoVal) {
-            if (procesoVal instanceof Date) {
-                fechaBase = new Date(procesoVal);
-            } else {
-                let parsedProceso = new Date(procesoVal);
-                if (!isNaN(parsedProceso)) {
-                    fechaBase = parsedProceso;
-                }
-            }
+            let parsedProceso = new Date(procesoVal);
+            if (!isNaN(parsedProceso)) fechaBase = parsedProceso;
         }
         fechaBase.setHours(0,0,0,0);
 
-        let diasAtrasoActualRaw = 0;
-        if (idxDiasMora !== -1 && row[idxDiasMora] !== undefined && row[idxDiasMora] !== "") {
-            diasAtrasoActualRaw = parseInt(row[idxDiasMora], 10) || 0;
-            diasAtrasoActual = diasAtrasoActualRaw;
-        }
-
-        // Calcular Vencimiento: Fecha Base (Proceso) - DÃ­as Mora
+        let diasAtrasoActualRaw = idxDiasMora !== -1 ? (parseInt(row[idxDiasMora], 10) || 0) : 0;
+        diasAtrasoActual = diasAtrasoActualRaw;
+        
         let fechaVenc = new Date(fechaBase);
         fechaVenc.setDate(fechaBase.getDate() - diasAtrasoActualRaw);
         fechaMostrada = fechaVenc.toLocaleDateString();
 
-        // DÃ­as Mora Cierre
-        if (idxDiasMoraCierre !== -1 && row[idxDiasMoraCierre] !== undefined && row[idxDiasMoraCierre] !== "") {
-            diasAtrasoCierre = parseInt(row[idxDiasMoraCierre], 10) || 0;
-        } else {
-            diasAtrasoCierre = '-';
-        }
-
+        diasAtrasoCierre = idxDiasMoraCierre !== -1 && row[idxDiasMoraCierre] !== "" ? (parseInt(row[idxDiasMoraCierre], 10) || 0) : "-";
         if (diasAtrasoActual < 0) diasAtrasoActual = 0;
 
-        // Tramo basado en DÃ­as Mora Actual
         if (diasAtrasoActual >= 1 && diasAtrasoActual <= 8) {
-            tramoStr = "Tramo 1 a 8 dÃ­as";
+            tramoStr = "Tramo 1 a 8 días";
             tramoClass = "tramo-1";
             tramo1Count++;
         } else if (diasAtrasoActual >= 9 && diasAtrasoActual <= 30) {
-            tramoStr = "Tramo 9 a 30 dÃ­as";
+            tramoStr = "Tramo 9 a 30 días";
             tramoClass = "tramo-2";
             tramo2Count++;
         } else if (diasAtrasoActual > 30) {
-            tramoStr = "Mayor a 30 dÃ­as";
+            tramoStr = "Mayor a 30 días";
             tramoClass = "tramo-otro";
             tramo3Count++;
         }
 
-        // Generar Mensaje de WhatsApp
         const horaActual = new Date().getHours();
-        let saludo = "Buenos dÃ­as";
-        if (horaActual >= 12 && horaActual < 19) saludo = "Buenas tardes";
-        else if (horaActual >= 19) saludo = "Buenas noches";
-        
-        let textoWhatsapp = `${saludo}, mi nombre es Jhunior Vargas, asesor de negocios de Agrobanco. Le escribo para comentarle que su prÃ©stamo `;
-        
+        let saludo = horaActual >= 12 && horaActual < 19 ? "Buenas tardes" : (horaActual >= 19 ? "Buenas noches" : "Buenos días");
+        let textoWhatsapp = `${saludo}, mi nombre es Jhunior Vargas, asesor de negocios de Agrobanco. Le escribo para comentarle que su préstamo `;
         if (diasAtrasoActualRaw <= 0) {
-            textoWhatsapp += `estÃ¡ prÃ³ximo a vencer el dÃ­a ${fechaMostrada}. Por favor comunicarse conmigo para poder apoyarle.`;
+            textoWhatsapp += `está próximo a vencer el día ${fechaMostrada}. Por favor comunicarse conmigo para poder apoyarle.`;
         } else {
-            textoWhatsapp += `cuenta con ${diasAtrasoActualRaw} dÃ­as de atraso, porque venciÃ³ el dÃ­a ${fechaMostrada}. Por favor comunicarse conmigo para poder apoyarle.`;
+            textoWhatsapp += `cuenta con ${diasAtrasoActualRaw} días de atraso, porque venció el día ${fechaMostrada}. Por favor comunicarse conmigo para poder apoyarle.`;
         }
         
-        let urlWhatsapp = "";
-
-        // Formatear celular para WhatsApp y Llamada
-        let cleanPhone = String(celular).replace(/\D/g, '');
-        let phoneWithCode = cleanPhone;
-        if (cleanPhone.length === 9) {
-            phoneWithCode = '51' + cleanPhone; // CÃ³digo de PerÃº
-        }
+        let cleanPhone = String(celular).replace(/\D/g, "");
+        let phoneWithCode = cleanPhone.length === 9 ? "51" + cleanPhone : cleanPhone;
         
         let celularHTML = celular;
         let botonesHTML = "";
         if (cleanPhone.length >= 7) {
-            urlWhatsapp = `https://wa.me/${phoneWithCode}?text=${encodeURIComponent(textoWhatsapp)}`;
+            const urlWhatsapp = `https://wa.me/${phoneWithCode}?text=${encodeURIComponent(textoWhatsapp)}`;
             botonesHTML = `
                 <div style="display:flex; gap:8px; justify-content:center;">
                     <a href="tel:${cleanPhone}" title="Llamar" style="text-decoration:none; background-color:#3498db; color:white; padding:5px 10px; border-radius:5px; font-size:0.9em; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.2);">&#128222; Llamar</a>
@@ -314,7 +251,7 @@ function processData(rows) {
             `;
         }
 
-        const tr = document.createElement('tr');
+        const tr = document.createElement("tr");
         tr.innerHTML = `
             <td>${dni}</td>
             <td>${cliente}</td>
@@ -326,88 +263,76 @@ function processData(rows) {
             <td>${diasAtrasoActual}</td>
             <td>${diasAtrasoCierre}</td>
             <td class="${tramoClass}">${tramoStr}</td>
-            <td><input type="text" class="compromiso-input" value="${compromiso}" placeholder="Escribe aquÃ­..."></td>
+            <td><input type="text" class="compromiso-input" value="${compromiso}" placeholder="Escribe aquí..."></td>
             <td style="${montoStyle}">${montoHTML}</td>
             <td class="cartas-td">
                 <label class="carta-label" style="display:block; font-size:0.85em; cursor:pointer; margin-bottom:4px;">
-                    <input type="checkbox" class="carta-chk"> Carta 1 a 8 dÃ­as
+                    <input type="checkbox" class="carta-chk"> Carta 1 a 8 días
                 </label>
                 <label class="carta-label" style="display:block; font-size:0.85em; cursor:pointer;">
-                    <input type="checkbox" class="carta-chk"> Carta 9 a 30 dÃ­as
+                    <input type="checkbox" class="carta-chk"> Carta 9 a 30 días
                 </label>
             </td>
             <td>
                 <select class="status-select">
                     <option value="pendiente">Pendiente</option>
-                    <option value="cancelo">CancelÃ³</option>
+                    <option value="cancelo">Canceló</option>
                 </select>
             </td>
         `;
         tableBody.appendChild(tr);
     });
 
-    if (datosFiltrados.length === 0 && idxAsesor !== -1) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td colspan="14" class="empty-state">No se encontraron clientes para el asesor Jhunior Vargas Gordon.</td>`;
-        tableBody.appendChild(tr);
-    } else if (datosFiltrados.length === 0) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td colspan="14" class="empty-state">No hay datos en el archivo.</td>`;
+    if (datosFiltrados.length === 0) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="14" class="empty-state">No se encontraron datos para mostrar.</td>`;
         tableBody.appendChild(tr);
     }
 
-    document.getElementById('total-monto').textContent = `$${totalMonto.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-    document.getElementById('total-tramo-1').textContent = tramo1Count;
-    document.getElementById('total-tramo-2').textContent = tramo2Count;
-    document.getElementById('total-tramo-3').textContent = tramo3Count;
+    document.getElementById("total-monto").textContent = `$${totalMonto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    document.getElementById("total-tramo-1").textContent = tramo1Count;
+    document.getElementById("total-tramo-2").textContent = tramo2Count;
+    document.getElementById("total-tramo-3").textContent = tramo3Count;
+    document.getElementById("summary-section").style.display = "flex";
 
-    document.getElementById('summary-section').style.display = 'flex';
-
-    // Agregar evento a los selectores de estado para pintar la fila
-    const selects = document.querySelectorAll('.status-select');
+    const selects = document.querySelectorAll(".status-select");
     selects.forEach(select => {
-        select.addEventListener('change', function() {
-            const tr = this.closest('tr');
-            if (this.value === 'cancelo') {
-                tr.classList.add('row-cancelo');
-            } else {
-                tr.classList.remove('row-cancelo');
-            }
+        select.addEventListener("change", function() {
+            const tr = this.closest("tr");
+            if (this.value === "cancelo") tr.classList.add("row-cancelo");
+            else tr.classList.remove("row-cancelo");
         });
     });
 
-    // Agregar evento a las casillas de cartas y aplicar estilos si ya estÃ¡n marcadas
-    const cartaChks = document.querySelectorAll('.carta-chk');
+    const cartaChks = document.querySelectorAll(".carta-chk");
     cartaChks.forEach(chk => {
-        chk.addEventListener('change', function() {
-            const label = this.closest('label');
+        chk.addEventListener("change", function() {
+            const label = this.closest("label");
             if (this.checked) {
-                label.style.backgroundColor = '#d4e6f1'; 
-                label.style.fontWeight = 'bold';
-                label.style.color = '#2980b9';
-                label.style.padding = '2px 4px';
-                label.style.borderRadius = '3px';
+                label.style.backgroundColor = "#d4e6f1"; 
+                label.style.fontWeight = "bold";
+                label.style.color = "#2980b9";
+                label.style.padding = "2px 4px";
+                label.style.borderRadius = "3px";
             } else {
-                label.style.backgroundColor = '';
-                label.style.fontWeight = 'normal';
-                label.style.color = '';
-                label.style.padding = '0';
+                label.style.backgroundColor = "";
+                label.style.fontWeight = "normal";
+                label.style.color = "";
+                label.style.padding = "0";
             }
         });
     });
 
-    // Cargar y Guardar datos localmente (Autosave)
-    const trs = document.querySelectorAll('#table-body tr');
+    const trs = document.querySelectorAll("#table-body tr");
     trs.forEach(tr => {
-        if (tr.querySelector('.empty-state')) return;
-        const tds = tr.querySelectorAll('td');
+        if (tr.querySelector(".empty-state")) return;
+        const tds = tr.querySelectorAll("td");
         const dni = tds[0].innerText;
         
-        const inputComp = tds[13].querySelector('input');
-        const chks = tds[13].querySelectorAll('input[type="checkbox"]');
-        const selectEst = tds[13].querySelector('select');
+        const inputComp = tds[10].querySelector("input");
+        const chks = tds[12].querySelectorAll("input[type='checkbox']");
+        const selectEst = tds[13].querySelector("select");
         
-        // Cargar datos desde Google Sheets (gestionesGlobal)
         const saved = gestionesGlobal[dni];
         if (saved) {
             if (saved.compromiso) inputComp.value = saved.compromiso;
@@ -416,55 +341,50 @@ function processData(rows) {
             if (saved.estado) { selectEst.value = saved.estado; selectEst.dispatchEvent(new Event("change")); }
         }
         
-        // Funcion para guardar en la nube
         const saveState = () => {
             updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value);
         };
         
-        inputComp.addEventListener('input', saveState);
-        chks[0].addEventListener('change', saveState);
-        chks[1].addEventListener('change', saveState);
-        selectEst.addEventListener('change', saveState);
+        inputComp.addEventListener("input", saveState);
+        chks[0].addEventListener("change", saveState);
+        chks[1].addEventListener("change", saveState);
+        selectEst.addEventListener("change", saveState);
     });
 
-    // Mostrar botÃ³n de exportar y configurar
-    const btnExport = document.getElementById('btn-export');
-    btnExport.style.display = 'inline-block';
+    const btnExport = document.getElementById("btn-export");
+    btnExport.style.display = "inline-block";
     btnExport.onclick = () => {
         const ws_data = [];
-        // Cabeceras
-        ws_data.push(["DNI", "Cliente", "TelÃ©fono", "Producto", "NÂ° Cuotas", "Vencimiento", "DÃ­as Mora Actual", "DÃ­as Mora Cierre", "Tramo de Visita", "Compromiso de Pago", "Monto Adeudado", "Carta 1 a 8 dÃ­as", "Carta 9 a 30 dÃ­as", "Estado"]);
+        ws_data.push(["DNI", "Cliente", "Teléfono", "Producto", "N° Cuotas", "Vencimiento", "Días Mora Actual", "Días Mora Cierre", "Tramo de Visita", "Compromiso de Pago", "Monto Adeudado", "Carta 1 a 8 días", "Carta 9 a 30 días", "Estado"]);
         
-        const rowsToExport = document.querySelectorAll('#table-body tr');
+        const rowsToExport = document.querySelectorAll("#table-body tr");
         rowsToExport.forEach(tr => {
-            if(tr.querySelector('.empty-state')) return;
-            const tds = tr.querySelectorAll('td');
+            if(tr.querySelector(".empty-state")) return;
+            const tds = tr.querySelectorAll("td");
             
             const dni = tds[0].innerText;
             const cli = tds[1].innerText;
             const tel = tds[2].innerText;
-            const prod = tds[3].innerText;
-            const cuo = tds[4].innerText;
-            const ven = tds[5].innerText;
-            const ma = tds[6].innerText;
-            const mc = tds[7].innerText;
-            const tram = tds[8].innerText;
-            const comp = tds[13].querySelector('input').value;
-            // Obtener el monto final (Ãºltima lÃ­nea)
-            const montoArr = tds[13].innerText.split('\n');
+            const prod = tds[4].innerText;
+            const cuo = tds[5].innerText;
+            const ven = tds[6].innerText;
+            const ma = tds[7].innerText;
+            const mc = tds[8].innerText;
+            const tram = tds[9].innerText;
+            const comp = tds[10].querySelector("input").value;
+            const montoArr = tds[11].innerText.split("\n");
             const monto = montoArr[montoArr.length - 1].trim();
-            const chks = tds[13].querySelectorAll('input[type="checkbox"]');
-            const c1 = chks[0].checked ? "SÃ­" : "No";
-            const c2 = chks[1].checked ? "SÃ­" : "No";
-            const est = tds[13].querySelector('select').value;
+            const chks = tds[12].querySelectorAll("input[type='checkbox']");
+            const c1 = chks[0].checked ? "Sí" : "No";
+            const c2 = chks[1].checked ? "Sí" : "No";
+            const est = tds[13].querySelector("select").value;
             
             ws_data.push([dni, cli, tel, prod, cuo, ven, ma, mc, tram, comp, monto, c1, c2, est]);
         });
         
         const ws = XLSX.utils.aoa_to_sheet(ws_data);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "GestiÃ³n Mora");
+        XLSX.utils.book_append_sheet(wb, ws, "Gestión Mora");
         XLSX.writeFile(wb, "Gestion_Actualizada.xlsx");
     };
 }
-
