@@ -79,20 +79,17 @@ function handleFile(e) {
         statusEl.textContent = "Subiendo a la nube (esto puede tardar unos segundos)...";
         
         try {
-            const response = await fetch(SCRIPT_URL, {
+            await fetch(SCRIPT_URL, {
                 method: "POST",
+                mode: "no-cors",
                 body: JSON.stringify({ action: "upload_data", data: rows })
-                // NO ponemos Content-Type para evitar bloqueos CORS
             });
-            const result = await response.json();
-            if (result.status === "ok") {
-                statusEl.textContent = "¡Base de datos actualizada!";
-                statusEl.style.color = "#27ae60";
-                // Volver a descargar para procesar igual
-                syncData();
-            } else {
-                throw new Error(result.error);
-            }
+            
+            statusEl.textContent = "¡Base de datos enviada!";
+            statusEl.style.color = "#27ae60";
+            
+            // Esperar 2 segundos para que Google Sheets procese, luego descargar
+            setTimeout(syncData, 2000);
         } catch(err) {
             console.error(err);
             statusEl.textContent = "Error al subir a la nube.";
