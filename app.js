@@ -1,9 +1,10 @@
-﻿const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzfc6dRBu5wpTFXzQg_ppK7xwUONfuOpVqAN9P4idF0hD1NfFEwK8QBvmjphgmNEhA8/exec";
+﻿const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8FX1qyTUnQKP0MZ3mEH5uU_tmqBSIRdlyeqRxhhR_SBPOn6io6ROg64gWtvkVMAvz/exec";
 
 let gestionesGlobal = {};
 
 document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("btn-sync").addEventListener("click", syncData);
+    document.getElementById("excel-file").addEventListener("change", handleFile, false);
     syncData();
 });
 
@@ -54,6 +55,51 @@ async function updateGestionEnNube(dni, compromiso, carta1, carta2, estado) {
     } catch(err) {
         console.error("Error guardando gestion:", err);
     }
+}
+
+
+function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const statusEl = document.getElementById("sync-status");
+    statusEl.textContent = "Leyendo Excel...";
+    statusEl.style.color = "#f39c12";
+
+    const reader = new FileReader();
+    reader.onload = async function (e) {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array", cellDates: true });
+
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+
+        let rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+        
+        statusEl.textContent = "Subiendo a la nube (esto puede tardar unos segundos)...";
+        
+        try {
+            const response = await fetch(SCRIPT_URL, {
+                method: "POST",
+                body: JSON.stringify({ action: "upload_data", data: rows })
+                // NO ponemos Content-Type para evitar bloqueos CORS
+            });
+            const result = await response.json();
+            if (result.status === "ok") {
+                statusEl.textContent = "¡Base de datos actualizada!";
+                statusEl.style.color = "#27ae60";
+                // Volver a descargar para procesar igual
+                syncData();
+            } else {
+                throw new Error(result.error);
+            }
+        } catch(err) {
+            console.error(err);
+            statusEl.textContent = "Error al subir a la nube.";
+            statusEl.style.color = "#e74c3c";
+        }
+    };
+    reader.readAsArrayBuffer(file);
 }
 
 function processData(rows) {

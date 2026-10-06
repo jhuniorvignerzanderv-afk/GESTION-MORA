@@ -16,12 +16,17 @@
 
         <section class="upload-section">
             <div class="file-input-wrapper" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; align-items: center;">
+                <label for="excel-file" class="file-label" style="background-color: #9b59b6; cursor: pointer;">
+                    <span id="file-name">&#128194; Subir Archivo Excel</span>
+                </label>
+                <input type="file" id="excel-file" accept=".xlsx, .xls" style="display:none;" />
+                
                 <button id="btn-sync" class="file-label" style="background-color: #3498db; border: none; cursor: pointer; color: white;">&#128259; Sincronizar Datos</button>
                 <span id="sync-status" style="font-weight: bold; color: #7f8c8d;"></span>
                 <button id="btn-export" class="file-label" style="background-color: #27ae60; border: none; display: none;">&#128202; Descargar Excel</button>
             </div>
             <div class="instructions">
-                <p><strong>Nota:</strong> Los datos se guardan en tiempo real. Pega tu reporte en la hoja de "Data" de Google Sheets y dale a Sincronizar.</p>
+                <p><strong>Nota:</strong> Al subir un Excel, se actualizará tu base de datos en la nube para todos tus dispositivos.</p>
             </div>
         </section>
 
