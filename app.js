@@ -111,41 +111,66 @@ function processData(rows) {
     const tableBody = document.getElementById("table-body");
     tableBody.innerHTML = "";
 
+    let hasHeader = false;
     let headerRowIndex = 0;
     for (let i = 0; i < Math.min(rows.length, 20); i++) {
         if(!Array.isArray(rows[i])) continue;
-        const rowStrings = rows[i].map(c => String(c).toUpperCase());
-        if (rowStrings.some(cell => cell.includes("NOMBRE_CLIENTE") || cell.includes("CLIENTE"))) {
+        const rowStrings = rows[i].map(c => String(c).toUpperCase().trim());
+        // Búsqueda exacta para evitar confundir con filas de datos
+        if (rowStrings.includes("CLIENTE") || rowStrings.includes("NOMBRE CLIENTE") || rowStrings.includes("NOMBRE_CLIENTE")) {
             headerRowIndex = i;
+            hasHeader = true;
             break;
         }
     }
 
-    const headers = rows[headerRowIndex].map(h => String(h).toLowerCase().trim());
-    const dataRows = rows.slice(headerRowIndex + 1);
+    let idxCliente, idxVencimiento, idxMonto, idxCompromiso, idxAsesor, idxProceso, idxDiasMora, idxDiasMoraCierre, idxDni, idxCelular, idxAmortizacion, idxProducto, idxCuotas, idxAgencia;
+    let dataRows;
 
-    const findExact = (exactNames) => {
-        return headers.findIndex(h => exactNames.includes(h));
-    };
+    if (hasHeader) {
+        const headers = rows[headerRowIndex].map(h => String(h).toLowerCase().trim());
+        dataRows = rows.slice(headerRowIndex + 1);
 
-    let idxCliente = findExact(["nombre_cliente", "cliente"]);
-    let idxVencimiento = findExact(["fecha compromiso", "vencimiento"]); 
-    let idxMonto = findExact(["saldo inicial", "monto adeudado"]);
-    let idxCompromiso = findExact(["compromiso", "compromiso de pago"]);
-    let idxAsesor = findExact(["oficial negocios actual", "asesor"]);
-    let idxProceso = findExact(["fecha de proceso", "proceso"]); 
-    let idxDiasMora = findExact(["dias de mora actual", "días mora actual", "das mora actual"]);
-    let idxDiasMoraCierre = findExact(["dias de mora al cierre", "días mora cierre", "das mora cierre"]);
-    let idxDni = findExact(["numero_documento", "dni"]);
-    let idxCelular = findExact(["celular_3", "telefono", "celular"]);
-    let idxAmortizacion = findExact(["amortizacion"]);
-    let idxProducto = findExact(["producto_trt", "producto"]);
-    let idxCuotas = findExact(["nro cuotas", "cuotas"]);
-    let idxAgencia = findExact(["agencia"]);
+        const findExact = (exactNames) => {
+            return headers.findIndex(h => exactNames.includes(h));
+        };
 
-    if (idxCliente === -1) idxCliente = 0;
-    if (idxVencimiento === -1) idxVencimiento = 1;
-    if (idxMonto === -1) idxMonto = 2;
+        idxCliente = findExact(["nombre_cliente", "nombre cliente", "cliente"]);
+        idxVencimiento = findExact(["fecha compromiso", "vencimiento"]); 
+        idxMonto = findExact(["saldo inicial", "monto adeudado", "monto"]);
+        idxCompromiso = findExact(["compromiso", "compromiso de pago"]);
+        idxAsesor = findExact(["oficial negocios actual", "asesor"]);
+        idxProceso = findExact(["fecha de proceso", "proceso"]); 
+        idxDiasMora = findExact(["dias de mora actual", "días mora actual", "das mora actual", "mora actual"]);
+        idxDiasMoraCierre = findExact(["dias de mora al cierre", "días mora cierre", "das mora cierre", "mora cierre"]);
+        idxDni = findExact(["numero_documento", "numero documento", "dni", "documento"]);
+        idxCelular = findExact(["celular_3", "telefono", "teléfono", "celular"]);
+        idxAmortizacion = findExact(["amortizacion", "amortización"]);
+        idxProducto = findExact(["producto_trt", "producto"]);
+        idxCuotas = findExact(["nro cuotas", "cuotas", "n° cuotas"]);
+        idxAgencia = findExact(["agencia"]);
+
+        if (idxCliente === -1) idxCliente = 0;
+        if (idxVencimiento === -1) idxVencimiento = 1;
+        if (idxMonto === -1) idxMonto = 2;
+    } else {
+        // Datos desde la nube (sin cabecera)
+        dataRows = rows;
+        idxProceso = 0;
+        idxDiasMora = 2;
+        idxDiasMoraCierre = 3;
+        idxAgencia = 7;
+        idxMonto = 8;
+        idxCliente = 9;
+        idxProducto = 14;
+        idxAsesor = 15;
+        idxDni = 19;
+        idxCelular = 22;
+        idxCuotas = 30;
+        idxVencimiento = -1; 
+        idxCompromiso = -1;
+        idxAmortizacion = -1;
+    }
 
     let datosFiltrados = dataRows.filter(row => row.length > 0 && row.some(cell => cell !== ""));
     
