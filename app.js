@@ -3,9 +3,9 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8FX1qyTUnQKP0MZ3mE
 let gestionesGlobal = {};
 
 document.addEventListener("DOMContentLoaded", () => {
-    document.getElementById("btn-sync").addEventListener("click", syncData);
+    document.getElementById("btn-sync").addEventListener("click", () => syncData(0));
     document.getElementById("excel-file").addEventListener("change", handleFile, false);
-    syncData();
+    syncData(0);
 });
 
 function handleFile(e) {
@@ -29,7 +29,8 @@ function handleFile(e) {
         statusEl.textContent = "Subiendo a la nube (esto puede tardar unos segundos)...";
         
         try {
-            // Actualizar la interfaz inmediatamente con los datos locales
+            // Guardar respaldo local y actualizar la interfaz inmediatamente
+            localStorage.setItem("mora_cached_rows", JSON.stringify(rows));
             processData(rows);
 
             await fetch(SCRIPT_URL, {
@@ -52,20 +53,29 @@ function handleFile(e) {
     reader.readAsArrayBuffer(file);
 }
 
-async function syncData() {
+async function syncData(retryCount = 0) {
     const statusEl = document.getElementById("sync-status");
-    statusEl.textContent = "Sincronizando...";
+    statusEl.textContent = retryCount > 0 ? `Reintentando conexión (${retryCount}/2)...` : "Sincronizando...";
     statusEl.style.color = "#f39c12";
 
     try {
         const urlNoCache = SCRIPT_URL + "?t=" + new Date().getTime();
-        const response = await fetch(urlNoCache);
+        const response = await fetch(urlNoCache, {
+            method: "GET",
+            redirect: "follow",
+            cache: "no-store"
+        });
+        if (!response.ok) {
+            throw new Error("HTTP " + response.status);
+        }
         const json = await response.json();
         
         gestionesGlobal = json.gestiones || {};
         const rows = json.data || [];
         
         if (rows.length > 0 && Array.isArray(rows[0])) {
+            localStorage.setItem("mora_cached_rows", JSON.stringify(rows));
+            localStorage.setItem("mora_cached_gestiones", JSON.stringify(gestionesGlobal));
             processData(rows);
             statusEl.textContent = "Sincronizado";
             statusEl.style.color = "#27ae60";
@@ -75,7 +85,23 @@ async function syncData() {
         }
     } catch(err) {
         console.error(err);
-        statusEl.textContent = "Error de conexion";
+        if (retryCount < 2) {
+            setTimeout(() => syncData(retryCount + 1), 1500);
+            return;
+        }
+        // Intentar cargar respaldo local si falla la conexión
+        const cachedRows = localStorage.getItem("mora_cached_rows");
+        const cachedGestiones = localStorage.getItem("mora_cached_gestiones");
+        if (cachedRows) {
+            try {
+                if (cachedGestiones) gestionesGlobal = JSON.parse(cachedGestiones);
+                processData(JSON.parse(cachedRows));
+                statusEl.textContent = "Modo sin conexión (mostrando últimos datos guardados)";
+                statusEl.style.color = "#e67e22";
+                return;
+            } catch (e) {}
+        }
+        statusEl.textContent = "Error de conexion (revisa tu internet o desactiva bloqueador de anuncios)";
         statusEl.style.color = "#e74c3c";
     }
 }
