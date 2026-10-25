@@ -240,6 +240,18 @@ function processData(rows) {
         fechaVenc.setDate(fechaBase.getDate() - diasAtrasoActualRaw);
         fechaMostrada = fechaVenc.toLocaleDateString();
 
+        // Calcular rangos de fechas para tramos de visita (0-8 días y 9-30 días desde el vencimiento)
+        let fTramo1Fin = new Date(fechaVenc);
+        fTramo1Fin.setDate(fechaVenc.getDate() + 8);
+        let fTramo2Ini = new Date(fechaVenc);
+        fTramo2Ini.setDate(fechaVenc.getDate() + 9);
+        let fTramo2Fin = new Date(fechaVenc);
+        fTramo2Fin.setDate(fechaVenc.getDate() + 30);
+
+        const formatShortDate = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+        const rango0a8 = `${formatShortDate(fechaVenc)} al ${formatShortDate(fTramo1Fin)}`;
+        const rango9a30 = `${formatShortDate(fTramo2Ini)} al ${formatShortDate(fTramo2Fin)}`;
+
         diasAtrasoCierre = idxDiasMoraCierre !== -1 && row[idxDiasMoraCierre] !== "" ? (parseInt(row[idxDiasMoraCierre], 10) || 0) : "-";
         if (diasAtrasoActual < 0) diasAtrasoActual = 0;
 
@@ -256,6 +268,13 @@ function processData(rows) {
             tramoClass = "tramo-otro";
             tramo3Count++;
         }
+
+        let tramosFechasHTML = `
+            <div style="margin-top: 5px; font-size: 0.78em; color: #555; font-weight: normal; line-height: 1.35; background: #f8f9fa; padding: 4px 6px; border-radius: 4px; border-left: 3px solid #bdc3c7;">
+                <div><strong style="color:#e67e22;">0-8d:</strong> ${rango0a8}</div>
+                <div><strong style="color:#c0392b;">9-30d:</strong> ${rango9a30}</div>
+            </div>
+        `;
 
         const horaActual = new Date().getHours();
         let saludo = horaActual >= 12 && horaActual < 19 ? "Buenas tardes" : (horaActual >= 19 ? "Buenas noches" : "Buenos días");
@@ -292,15 +311,18 @@ function processData(rows) {
             <td>${fechaMostrada}</td>
             <td>${diasAtrasoActual}</td>
             <td>${diasAtrasoCierre}</td>
-            <td class="${tramoClass}">${tramoStr}</td>
+            <td class="${tramoClass}">
+                <div>${tramoStr}</div>
+                ${tramosFechasHTML}
+            </td>
             <td><input type="text" class="compromiso-input" value="${compromiso}" placeholder="Escribe aquí..."></td>
             <td style="${montoStyle}">${montoHTML}</td>
             <td class="cartas-td">
-                <label class="carta-label" style="display:block; font-size:0.85em; cursor:pointer; margin-bottom:4px;">
-                    <input type="checkbox" class="carta-chk"> Carta 1 a 8 días
+                <label class="carta-label" style="display:block; font-size:0.85em; cursor:pointer; margin-bottom:4px;" title="Rango: ${rango0a8}">
+                    <input type="checkbox" class="carta-chk"> Carta 1 a 8 días <span style="display:block; font-size:0.85em; color:#7f8c8d; margin-left:18px;">(${rango0a8})</span>
                 </label>
-                <label class="carta-label" style="display:block; font-size:0.85em; cursor:pointer;">
-                    <input type="checkbox" class="carta-chk"> Carta 9 a 30 días
+                <label class="carta-label" style="display:block; font-size:0.85em; cursor:pointer;" title="Rango: ${rango9a30}">
+                    <input type="checkbox" class="carta-chk"> Carta 9 a 30 días <span style="display:block; font-size:0.85em; color:#7f8c8d; margin-left:18px;">(${rango9a30})</span>
                 </label>
             </td>
             <td>
@@ -385,7 +407,7 @@ function processData(rows) {
     btnExport.style.display = "inline-block";
     btnExport.onclick = () => {
         const ws_data = [];
-        ws_data.push(["DNI", "Cliente", "Teléfono", "Producto", "N° Cuotas", "Vencimiento", "Días Mora Actual", "Días Mora Cierre", "Tramo de Visita", "Compromiso de Pago", "Monto Adeudado", "Carta 1 a 8 días", "Carta 9 a 30 días", "Estado"]);
+        ws_data.push(["DNI", "Cliente", "Teléfono", "Producto", "N° Cuotas", "Vencimiento", "Días Mora Actual", "Días Mora Cierre", "Tramo de Visita", "Fechas Tramo 0-8 días", "Fechas Tramo 9-30 días", "Compromiso de Pago", "Monto Adeudado", "Carta 1 a 8 días", "Carta 9 a 30 días", "Estado"]);
         
         const rowsToExport = document.querySelectorAll("#table-body tr");
         rowsToExport.forEach(tr => {
@@ -400,7 +422,10 @@ function processData(rows) {
             const ven = tds[6].innerText;
             const ma = tds[7].innerText;
             const mc = tds[8].innerText;
-            const tram = tds[9].innerText;
+            const tramLines = tds[9].innerText.split("\n").map(s => s.trim()).filter(Boolean);
+            const tram = tramLines[0] || "";
+            const f0a8 = (tramLines[1] || "").replace("0-8d:", "").trim();
+            const f9a30 = (tramLines[2] || "").replace("9-30d:", "").trim();
             const comp = tds[10].querySelector("input").value;
             const montoArr = tds[11].innerText.split("\n");
             const monto = montoArr[montoArr.length - 1].trim();
@@ -409,7 +434,7 @@ function processData(rows) {
             const c2 = chks[1].checked ? "Sí" : "No";
             const est = tds[13].querySelector("select").value;
             
-            ws_data.push([dni, cli, tel, prod, cuo, ven, ma, mc, tram, comp, monto, c1, c2, est]);
+            ws_data.push([dni, cli, tel, prod, cuo, ven, ma, mc, tram, f0a8, f9a30, comp, monto, c1, c2, est]);
         });
         
         const ws = XLSX.utils.aoa_to_sheet(ws_data);
