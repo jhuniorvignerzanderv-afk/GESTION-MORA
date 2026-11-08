@@ -29,22 +29,40 @@
             </div>
         </section>
 
+        <section class="alerts-banner" id="alerts-banner" style="display: none; margin-bottom: 20px; border-radius: 8px; overflow: hidden; border: 2px solid #e74c3c; background-color: #fff5f5; box-shadow: 0 3px 8px rgba(231, 76, 60, 0.15);">
+            <div style="background-color: #e74c3c; color: white; padding: 10px 15px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <div style="font-weight: bold; font-size: 1rem;">
+                    &#128680; ALERTA URGENTE DE GESTIÓN TELEFÓNICA (Para evitar llamadas de atención)
+                </div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button id="btn-ver-sin-llamar" style="background: white; color: #c0392b; border: none; padding: 5px 12px; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 0.85rem;">Ver Clientes EN MORA sin llamar (<span id="count-sin-llamar">0</span>)</button>
+                    <button id="btn-ver-preventiva" style="background: #f39c12; color: white; border: none; padding: 5px 12px; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 0.85rem;">Ver Próximos a Vencer (0 a 3 días) (<span id="count-preventiva-urgente">0</span>)</button>
+                    <button id="btn-ver-todos-alerta" style="background: #2c3e50; color: white; border: none; padding: 5px 12px; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 0.85rem;">Mostrar Todos</button>
+                </div>
+            </div>
+            <div id="alerts-detail" style="padding: 12px 15px; font-size: 0.9rem; color: #2c3e50; display: flex; flex-direction: column; gap: 6px;"></div>
+        </section>
+
         <section class="summary-section" id="summary-section" style="display: none;">
-            <div class="summary-card">
+            <div class="summary-card" style="cursor: pointer;" onclick="filtrarRapido('todos')" title="Haz clic para ver todos">
                 <h3>Total Adeudado</h3>
                 <p id="total-monto">.00</p>
             </div>
-            <div class="summary-card">
+            <div class="summary-card" style="border-left-color: #e74c3c; cursor: pointer;" onclick="filtrarRapido('sin-llamar-mora')" title="Haz clic para ver a quiénes te falta llamar hoy">
+                <h3 style="color: #c0392b; font-weight: bold;">&#128222; En Mora SIN Llamar</h3>
+                <p id="total-sin-llamar" style="color: #e74c3c;">0</p>
+            </div>
+            <div class="summary-card" style="border-left-color: #e67e22; cursor: pointer;" onclick="filtrarRapido('tramo-1')" title="Haz clic para filtrar Tramo 1-8 días">
                 <h3>Visitas Tramo 1-8 días</h3>
                 <p id="total-tramo-1">0</p>
             </div>
-            <div class="summary-card">
+            <div class="summary-card" style="border-left-color: #c0392b; cursor: pointer;" onclick="filtrarRapido('tramo-2')" title="Haz clic para filtrar Tramo 9-30 días">
                 <h3>Visitas Tramo 9-30 días</h3>
                 <p id="total-tramo-2">0</p>
             </div>
-            <div class="summary-card">
-                <h3>Otros tramos (>30 días)</h3>
-                <p id="total-tramo-3">0</p>
+            <div class="summary-card" style="border-left-color: #f39c12; cursor: pointer;" onclick="filtrarRapido('preventiva-urgente')" title="Haz clic para ver los que vencen hoy o en 3 días">
+                <h3>&#9200; Vencen en 0-3 días</h3>
+                <p id="total-preventiva" style="color: #d35400;">0</p>
             </div>
         </section>
 
@@ -52,8 +70,11 @@
             <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; flex: 1;">
                 <input type="text" id="filter-search" placeholder="&#128269; Buscar por cliente o DNI..." style="padding: 8px 12px; border: 1px solid #bdc3c7; border-radius: 6px; min-width: 220px; font-size: 0.9rem;">
                 <select id="filter-tramo" style="padding: 8px 12px; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 0.9rem; cursor: pointer;">
-                    <option value="todos">Todos los tramos</option>
-                    <option value="en-mora">Solo en Mora (&ge; 1 día)</option>
+                    <option value="todos">Todos los clientes</option>
+                    <option value="sin-llamar-mora">&#128680; En Mora SIN LLAMAR (Urgente)</option>
+                    <option value="nuevos-mora">&#9888; Nuevos que entraron en Mora</option>
+                    <option value="preventiva-urgente">&#9200; Vencen Hoy o en 1 a 3 días</option>
+                    <option value="en-mora">Todos en Mora (&ge; 1 día)</option>
                     <option value="tramo-1">Tramo 1 a 8 días</option>
                     <option value="tramo-2">Tramo 9 a 30 días</option>
                     <option value="tramo-otro">Mayor a 30 días</option>
@@ -61,7 +82,7 @@
                 </select>
                 <select id="filter-estado" style="padding: 8px 12px; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 0.9rem; cursor: pointer;">
                     <option value="todos">Todos los estados</option>
-                    <option value="pendiente">Solo Pendientes</option>
+                    <option value="pendiente">Solo Pendientes de Pago</option>
                     <option value="cancelo">Solo Cancelados</option>
                 </select>
             </div>
@@ -99,6 +120,6 @@
         </section>
     </div>
 
-    <script src="app.js?v=23"></script>
+    <script src="app.js?v=24"></script>
 </body>
 </html>

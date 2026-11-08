@@ -3,6 +3,11 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8FX1qyTUnQKP0MZ3mE
 let gestionesGlobal = {};
 const saveTimers = {};
 
+function tieneCompromisoValido(comp) {
+    const str = String(comp || "").trim();
+    return str !== "" && str !== "-";
+}
+
 function cargarGestionesLocales() {
     let localGestiones = {};
     try {
@@ -10,7 +15,6 @@ function cargarGestionesLocales() {
         if (cached) {
             localGestiones = JSON.parse(cached) || {};
         }
-        // También recuperar cualquier clave individual mora_<dni> guardada previamente
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
             if (key && key.startsWith("mora_") && key !== "mora_cached_rows" && key !== "mora_cached_gestiones") {
@@ -47,23 +51,28 @@ function fusionarGestiones(nubeGestiones, localGestiones) {
         const nubeComp = String(nube.compromiso || "").trim();
         const localComp = String(local.compromiso || "").trim();
 
-        // Si el dato local tiene cambios pendientes de subir (dirty) o si el local tiene compromiso apuntado y la nube está vacía ("-" o "")
         if (local.dirty) {
+            const compFinal = localComp !== "" ? local.compromiso : (nube.compromiso || "-");
             resultado[dni] = {
-                compromiso: localComp !== "" ? local.compromiso : (nube.compromiso || "-"),
+                compromiso: compFinal,
                 carta1: local.carta1 !== undefined ? Boolean(local.carta1) : Boolean(nube.carta1),
                 carta2: local.carta2 !== undefined ? Boolean(local.carta2) : Boolean(nube.carta2),
                 estado: local.estado || nube.estado || "pendiente",
+                llamado: local.llamado !== undefined ? Boolean(local.llamado) : tieneCompromisoValido(compFinal),
+                fechaLlamada: local.fechaLlamada || "",
                 updatedAt: local.updatedAt || Date.now(),
                 dirty: true
             };
         } else {
-            const usarCompromisoLocal = (localComp !== "" && localComp !== "-") && (nubeComp === "" || nubeComp === "-");
+            const usarCompromisoLocal = tieneCompromisoValido(localComp) && !tieneCompromisoValido(nubeComp);
+            const compFinal = usarCompromisoLocal ? local.compromiso : (nube.compromiso || local.compromiso || "-");
             resultado[dni] = {
-                compromiso: usarCompromisoLocal ? local.compromiso : (nube.compromiso || local.compromiso || "-"),
+                compromiso: compFinal,
                 carta1: Boolean(nube.carta1 || local.carta1),
                 carta2: Boolean(nube.carta2 || local.carta2),
                 estado: (nube.estado && nube.estado !== "pendiente") ? nube.estado : (local.estado || nube.estado || "pendiente"),
+                llamado: Boolean(local.llamado || tieneCompromisoValido(compFinal)),
+                fechaLlamada: local.fechaLlamada || "",
                 updatedAt: local.updatedAt || Date.now(),
                 dirty: false
             };
@@ -73,8 +82,15 @@ function fusionarGestiones(nubeGestiones, localGestiones) {
     return resultado;
 }
 
-// Inicializar gestionesGlobal con lo que ya esté guardado en el navegador
 gestionesGlobal = cargarGestionesLocales();
+
+window.filtrarRapido = function(filtroTramo) {
+    const selectTramo = document.getElementById("filter-tramo");
+    if (selectTramo) {
+        selectTramo.value = filtroTramo;
+        aplicarFiltrosTabla();
+    }
+};
 
 document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("btn-sync").addEventListener("click", () => syncData(0));
@@ -87,7 +103,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (filterTramo) filterTramo.addEventListener("change", aplicarFiltrosTabla);
     if (filterEstado) filterEstado.addEventListener("change", aplicarFiltrosTabla);
 
-    // Mostrar inmediatamente datos en caché si existen para que no empiece en blanco
+    const btnSinLlamar = document.getElementById("btn-ver-sin-llamar");
+    const btnPreventiva = document.getElementById("btn-ver-preventiva");
+    const btnTodosAlerta = document.getElementById("btn-ver-todos-alerta");
+    if (btnSinLlamar) btnSinLlamar.addEventListener("click", () => window.filtrarRapido("sin-llamar-mora"));
+    if (btnPreventiva) btnPreventiva.addEventListener("click", () => window.filtrarRapido("preventiva-urgente"));
+    if (btnTodosAlerta) btnTodosAlerta.addEventListener("click", () => window.filtrarRapido("todos"));
+
     const cachedRows = localStorage.getItem("mora_cached_rows");
     if (cachedRows) {
         try {
@@ -119,11 +141,9 @@ function handleFile(e) {
         statusEl.textContent = "Subiendo a la nube (esto puede tardar unos segundos)...";
         
         try {
-            // Asegurar que conservamos las gestiones locales actuales antes de procesar
             const locales = cargarGestionesLocales();
             gestionesGlobal = fusionarGestiones(gestionesGlobal, locales);
 
-            // Guardar respaldo local y actualizar la interfaz inmediatamente
             localStorage.setItem("mora_cached_rows", JSON.stringify(rows));
             processData(rows);
 
@@ -136,7 +156,6 @@ function handleFile(e) {
             statusEl.textContent = "¡Base de datos enviada y actualizada!";
             statusEl.style.color = "#27ae60";
             
-            // Sincronizar después para obtener posibles gestiones de otros dispositivos
             setTimeout(() => syncData(0), 3500);
         } catch(err) {
             console.error(err);
@@ -151,7 +170,7 @@ async function sincronizarPendientesConNube() {
     const locales = cargarGestionesLocales();
     const pendientes = Object.entries(locales).filter(([_, val]) => val && val.dirty);
     for (const [dni, val] of pendientes) {
-        await enviarGestionANube(dni, val.compromiso, val.carta1, val.carta2, val.estado);
+        await enviarGestionANube(dni, val.compromiso, val.carta1, val.carta2, val.estado, val.llamado, val.fechaLlamada);
     }
 }
 
@@ -161,7 +180,6 @@ async function syncData(retryCount = 0) {
     statusEl.style.color = "#f39c12";
 
     try {
-        // Primero enviar cualquier gestión que haya quedado pendiente de subir
         await sincronizarPendientesConNube();
 
         const urlNoCache = SCRIPT_URL + "?t=" + new Date().getTime();
@@ -195,7 +213,6 @@ async function syncData(retryCount = 0) {
             setTimeout(() => syncData(retryCount + 1), 1500);
             return;
         }
-        // Cargar respaldo local si falla la conexión
         const cachedRows = localStorage.getItem("mora_cached_rows");
         if (cachedRows) {
             try {
@@ -211,13 +228,16 @@ async function syncData(retryCount = 0) {
     }
 }
 
-function guardarGestionLocalInmediato(dni, compromiso, carta1, carta2, estado, dirty = true) {
+function guardarGestionLocalInmediato(dni, compromiso, carta1, carta2, estado, llamado = false, fechaLlamada = "", dirty = true) {
     const dniKey = String(dni).trim();
+    const prev = gestionesGlobal[dniKey] || {};
     const registro = {
         compromiso: compromiso,
         carta1: Boolean(carta1),
         carta2: Boolean(carta2),
         estado: estado || "pendiente",
+        llamado: Boolean(llamado || tieneCompromisoValido(compromiso)),
+        fechaLlamada: fechaLlamada || prev.fechaLlamada || "",
         updatedAt: Date.now(),
         dirty: dirty
     };
@@ -230,7 +250,7 @@ function guardarGestionLocalInmediato(dni, compromiso, carta1, carta2, estado, d
     }
 }
 
-async function enviarGestionANube(dni, compromiso, carta1, carta2, estado) {
+async function enviarGestionANube(dni, compromiso, carta1, carta2, estado, llamado = false, fechaLlamada = "") {
     const dniKey = String(dni).trim();
     const url = new URL(SCRIPT_URL);
     url.searchParams.append("action", "update");
@@ -242,14 +262,13 @@ async function enviarGestionANube(dni, compromiso, carta1, carta2, estado) {
     url.searchParams.append("t", Date.now());
 
     try {
-        // mode: "no-cors" y keepalive: true garantizan que el envío llegue a Google Sheets incluso si cierras la pestaña inmediatamente
         await fetch(url.toString(), {
             method: "GET",
             mode: "no-cors",
             keepalive: true,
             cache: "no-store"
         });
-        guardarGestionLocalInmediato(dniKey, compromiso, carta1, carta2, estado, false);
+        guardarGestionLocalInmediato(dniKey, compromiso, carta1, carta2, estado, llamado, fechaLlamada, false);
         return true;
     } catch(err) {
         console.error("Error guardando gestion en la nube:", err);
@@ -257,10 +276,9 @@ async function enviarGestionANube(dni, compromiso, carta1, carta2, estado) {
     }
 }
 
-function updateGestionEnNube(dni, compromiso, carta1, carta2, estado, inmediato = false, statusBadge = null) {
+function updateGestionEnNube(dni, compromiso, carta1, carta2, estado, llamado = false, fechaLlamada = "", inmediato = false, statusBadge = null) {
     const dniKey = String(dni).trim();
-    // 1. Guardar instantáneamente en el navegador (nunca se pierde aunque cierre la ventana)
-    guardarGestionLocalInmediato(dniKey, compromiso, carta1, carta2, estado, true);
+    guardarGestionLocalInmediato(dniKey, compromiso, carta1, carta2, estado, llamado, fechaLlamada, true);
 
     if (statusBadge) {
         statusBadge.textContent = "✓ Guardado";
@@ -268,16 +286,15 @@ function updateGestionEnNube(dni, compromiso, carta1, carta2, estado, inmediato 
         statusBadge.style.opacity = "1";
     }
 
-    // 2. Enviar a la nube (con pequeño debounce si está escribiendo texto, o inmediato al salir/cambiar checkbox)
     if (saveTimers[dniKey]) {
         clearTimeout(saveTimers[dniKey]);
     }
 
     if (inmediato) {
-        enviarGestionANube(dniKey, compromiso, carta1, carta2, estado);
+        enviarGestionANube(dniKey, compromiso, carta1, carta2, estado, llamado, fechaLlamada);
     } else {
         saveTimers[dniKey] = setTimeout(() => {
-            enviarGestionANube(dniKey, compromiso, carta1, carta2, estado);
+            enviarGestionANube(dniKey, compromiso, carta1, carta2, estado, llamado, fechaLlamada);
         }, 400);
     }
 }
@@ -287,19 +304,16 @@ function parsearFechaSegura(valor) {
     if (valor instanceof Date && !isNaN(valor)) {
         return new Date(valor.getFullYear(), valor.getMonth(), valor.getDate());
     }
-    // Si es número serial de Excel (ej. 46295)
     if (typeof valor === "number" && valor > 25000 && valor < 80000) {
         const utcDays = Math.floor(valor - 25569);
         const d = new Date(utcDays * 86400 * 1000);
         return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
     }
     const str = String(valor).trim();
-    // Formato ISO YYYY-MM-DD...
     const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (isoMatch) {
         return new Date(parseInt(isoMatch[1], 10), parseInt(isoMatch[2], 10) - 1, parseInt(isoMatch[3], 10));
     }
-    // Formato DD/MM/YYYY o DD-MM-YYYY
     const dmyMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
     if (dmyMatch) {
         return new Date(parseInt(dmyMatch[3], 10), parseInt(dmyMatch[2], 10) - 1, parseInt(dmyMatch[1], 10));
@@ -316,6 +330,11 @@ function formatShortDate(d) {
     return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
 }
 
+function obtenerFechaHoraCorta() {
+    const d = new Date();
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 function processData(rows) {
     if (!rows || rows.length === 0) {
         alert("El archivo parece estar vacío.");
@@ -330,7 +349,6 @@ function processData(rows) {
     for (let i = 0; i < Math.min(rows.length, 20); i++) {
         if(!Array.isArray(rows[i])) continue;
         const rowStrings = rows[i].map(c => String(c).toUpperCase().trim());
-        // Búsqueda exacta para evitar confundir con filas de datos
         if (rowStrings.includes("CLIENTE") || rowStrings.includes("NOMBRE CLIENTE") || rowStrings.includes("NOMBRE_CLIENTE")) {
             headerRowIndex = i;
             hasHeader = true;
@@ -368,7 +386,6 @@ function processData(rows) {
         if (idxVencimiento === -1) idxVencimiento = 1;
         if (idxMonto === -1) idxMonto = 2;
     } else {
-        // Datos desde la nube (sin cabecera)
         dataRows = rows;
         idxProceso = 0;
         idxDiasMora = 2;
@@ -405,7 +422,6 @@ function processData(rows) {
 
     let fechaReporteDetectada = null;
 
-    // Pre-procesar filas para calcular días de mora actualizados a hoy y poder ordenarlas por prioridad
     const clientesProcesados = datosFiltrados.map(row => {
         const dni = String(idxDni !== -1 ? (row[idxDni] || "-") : "-").trim();
         const cliente = row[idxCliente] || "-";
@@ -427,14 +443,11 @@ function processData(rows) {
 
         let diasAtrasoExcel = idxDiasMora !== -1 && row[idxDiasMora] !== "" ? (parseInt(row[idxDiasMora], 10) || 0) : 0;
 
-        // Fecha de vencimiento exacta del préstamo/cuota
         let fechaVenc = new Date(fechaBase.getFullYear(), fechaBase.getMonth(), fechaBase.getDate());
         fechaVenc.setDate(fechaVenc.getDate() - diasAtrasoExcel);
 
-        // Días transcurridos desde la fecha de proceso del Excel hasta el día de HOY
         const diasTranscurridosDesdeReporte = Math.round((fechaHoy.getTime() - fechaBase.getTime()) / (1000 * 60 * 60 * 24));
 
-        // Cálculo automático de los días de mora reales al día de HOY
         let diasAtrasoRealHoy = diasAtrasoExcel;
         if (diasTranscurridosDesdeReporte > 0) {
             diasAtrasoRealHoy = Math.round((fechaHoy.getTime() - fechaVenc.getTime()) / (1000 * 60 * 60 * 24));
@@ -442,8 +455,8 @@ function processData(rows) {
 
         const diasAtrasoMostrar = diasAtrasoRealHoy < 0 ? 0 : diasAtrasoRealHoy;
         const entroAMoraDespues = (diasAtrasoExcel <= 0 && diasAtrasoRealHoy >= 1);
+        const esPreventivaUrgente = (diasAtrasoRealHoy <= 0 && diasAtrasoRealHoy >= -3);
 
-        // Si Días Mora Cierre está en el Excel, también ajustarlo con base en los días reales si corresponde
         let diasAtrasoCierre = idxDiasMoraCierre !== -1 && row[idxDiasMoraCierre] !== "" ? (parseInt(row[idxDiasMoraCierre], 10) || 0) : "-";
 
         return {
@@ -463,19 +476,23 @@ function processData(rows) {
             diasAtrasoMostrar,
             diasTranscurridosDesdeReporte,
             entroAMoraDespues,
+            esPreventivaUrgente,
             diasAtrasoCierre
         };
     });
 
-    // Ordenar: primero los que están en mora hoy (de mayor a menor atraso, o tramo 1-8 y 9-30 arriba), y luego los que están por vencer
+    // Ordenar: 1° Clientes nuevos que entraron en mora o en Tramo 1-8 (prioridad máxima para llamar), 2° Resto en mora, 3° Próximos a vencer (0, -1, -2...)
     clientesProcesados.sort((a, b) => {
         const aEnMora = a.diasAtrasoMostrar >= 1 ? 1 : 0;
         const bEnMora = b.diasAtrasoMostrar >= 1 ? 1 : 0;
         if (aEnMora !== bEnMora) return bEnMora - aEnMora;
         if (aEnMora === 1) {
-            return b.diasAtrasoMostrar - a.diasAtrasoMostrar;
+            // Priorizar Tramo 1 a 8 días (recién entrados en mora) arriba del todo para que nunca se le pasen sin llamar
+            const aReciente = a.diasAtrasoMostrar <= 8 ? 1 : 0;
+            const bReciente = b.diasAtrasoMostrar <= 8 ? 1 : 0;
+            if (aReciente !== bReciente) return bReciente - aReciente;
+            return a.diasAtrasoMostrar - b.diasAtrasoMostrar;
         }
-        // Para los que aún no vencen (preventiva), mostrar primero los más próximos a vencer (ej. 0, -1, -2...)
         return b.diasAtrasoRealHoy - a.diasAtrasoRealHoy;
     });
 
@@ -503,6 +520,7 @@ function processData(rows) {
             diasAtrasoMostrar,
             diasTranscurridosDesdeReporte,
             entroAMoraDespues,
+            esPreventivaUrgente,
             diasAtrasoCierre
         } = item;
 
@@ -519,7 +537,6 @@ function processData(rows) {
 
         const fechaMostrada = formatShortDate(fechaVenc);
 
-        // Calcular rangos de fechas para tramos de visita (0-8 días y 9-30 días desde el vencimiento)
         let fTramo1Fin = new Date(fechaVenc);
         fTramo1Fin.setDate(fechaVenc.getDate() + 8);
         let fTramo2Ini = new Date(fechaVenc);
@@ -547,16 +564,22 @@ function processData(rows) {
             tramoClass = "tramo-otro";
             tramoFilterKey = "tramo-otro";
         } else if (diasAtrasoRealHoy < 0) {
-            tramoStr = `Al día (vence en ${Math.abs(diasAtrasoRealHoy)}d)`;
+            const diasFaltan = Math.abs(diasAtrasoRealHoy);
+            if (diasFaltan <= 3) {
+                tramoStr = `⏰ Vence en ${diasFaltan} día(s)`;
+                tramoClass = "tramo-1";
+            } else {
+                tramoStr = `Al día (vence en ${diasFaltan}d)`;
+            }
         } else if (diasAtrasoRealHoy === 0) {
-            tramoStr = "Vence hoy (0 días)";
+            tramoStr = "⏰ ¡VENCE HOY!";
+            tramoClass = "tramo-2";
         }
 
-        // Mostrar detalle de actualización automática de mora
-        let detalleMoraHTML = `<div style="font-weight: bold; font-size: 1.05em;">${diasAtrasoMostrar}</div>`;
+        let detalleMoraHTML = `<div style="font-weight: bold; font-size: 1.1em;">${diasAtrasoMostrar}</div>`;
         if (diasTranscurridosDesdeReporte > 0) {
             if (entroAMoraDespues) {
-                detalleMoraHTML += `<div style="font-size: 0.72em; color: #c0392b; background: #FDEDEC; padding: 2px 4px; border-radius: 3px; margin-top: 2px; font-weight: bold;">&#9888; Pasó a mora (Excel: ${diasAtrasoExcel}d)</div>`;
+                detalleMoraHTML += `<div style="font-size: 0.74em; color: #fff; background: #e74c3c; padding: 2px 5px; border-radius: 4px; margin-top: 3px; font-weight: bold; display: inline-block;">&#128680; NUEVO EN MORA (Excel: ${diasAtrasoExcel}d)</div>`;
             } else if (diasAtrasoMostrar !== diasAtrasoExcel) {
                 detalleMoraHTML += `<div style="font-size: 0.72em; color: #7f8c8d; margin-top: 2px;">En Excel: ${diasAtrasoExcel}d</div>`;
             }
@@ -572,10 +595,12 @@ function processData(rows) {
         const horaActual = new Date().getHours();
         let saludo = horaActual >= 12 && horaActual < 19 ? "Buenas tardes" : (horaActual >= 19 ? "Buenas noches" : "Buenos días");
         let textoWhatsapp = `${saludo}, mi nombre es Jhunior Vargas, asesor de negocios de Agrobanco. Le escribo para comentarle que su préstamo `;
-        if (diasAtrasoRealHoy <= 0) {
-            textoWhatsapp += `está próximo a vencer el día ${fechaMostrada}. Por favor comunicarse conmigo para poder apoyarle.`;
+        if (diasAtrasoRealHoy < 0) {
+            textoWhatsapp += `está próximo a vencer el día ${fechaMostrada} (en ${Math.abs(diasAtrasoRealHoy)} días). Por favor comunicarse conmigo para poder apoyarle con su pago puntual.`;
+        } else if (diasAtrasoRealHoy === 0) {
+            textoWhatsapp += `vence el día de HOY ${fechaMostrada}. Por favor comunicarse conmigo para confirmar su pago y evitar caer en mora.`;
         } else {
-            textoWhatsapp += `cuenta con ${diasAtrasoMostrar} días de atraso, porque venció el día ${fechaMostrada}. Por favor comunicarse conmigo para poder apoyarle.`;
+            textoWhatsapp += `cuenta con ${diasAtrasoMostrar} día(s) de atraso, porque venció el día ${fechaMostrada}. Por favor comunicarse conmigo de manera urgente para poder apoyarle.`;
         }
         
         let cleanPhone = String(celular).replace(/\D/g, "");
@@ -586,25 +611,39 @@ function processData(rows) {
         if (cleanPhone.length >= 7) {
             const urlWhatsapp = `https://wa.me/${phoneWithCode}?text=${encodeURIComponent(textoWhatsapp)}`;
             botonesHTML = `
-                <div style="display:flex; gap:8px; justify-content:center;">
-                    <a href="tel:${cleanPhone}" title="Llamar" style="text-decoration:none; background-color:#3498db; color:white; padding:5px 10px; border-radius:5px; font-size:0.9em; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.2);">&#128222; Llamar</a>
-                    <a href="${urlWhatsapp}" target="_blank" title="WhatsApp" style="text-decoration:none; background-color:#25D366; color:white; padding:5px 10px; border-radius:5px; font-size:0.9em; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.2);">&#128172; WhatsApp</a>
+                <div style="display:flex; gap:6px; justify-content:center; margin-bottom: 5px;">
+                    <a href="tel:${cleanPhone}" class="btn-accion-llamar" title="Llamar" style="text-decoration:none; background-color:#3498db; color:white; padding:5px 8px; border-radius:5px; font-size:0.85em; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.15);">&#128222; Llamar</a>
+                    <a href="${urlWhatsapp}" target="_blank" class="btn-accion-ws" title="WhatsApp" style="text-decoration:none; background-color:#25D366; color:white; padding:5px 8px; border-radius:5px; font-size:0.85em; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.15);">&#128172; WhatsApp</a>
                 </div>
             `;
         }
 
+        botonesHTML += `
+            <label class="llamado-label" style="display:inline-flex; align-items:center; gap:4px; font-size:0.78em; cursor:pointer; padding:2px 6px; border-radius:4px; background:#f1f2f6; color:#57606f;">
+                <input type="checkbox" class="llamado-chk"> <span class="llamado-text">Falta llamar</span>
+            </label>
+        `;
+
         const tr = document.createElement("tr");
         tr.dataset.dni = dni;
         tr.dataset.cliente = String(cliente).toLowerCase();
+        tr.dataset.clienteNombre = String(cliente);
         tr.dataset.tramo = tramoFilterKey;
         tr.dataset.enMora = diasAtrasoMostrar >= 1 ? "si" : "no";
+        tr.dataset.diasMora = diasAtrasoMostrar;
+        tr.dataset.nuevoMora = entroAMoraDespues ? "si" : "no";
+        tr.dataset.preventivaUrgente = esPreventivaUrgente ? "si" : "no";
         tr.dataset.monto = monto;
+
+        if (entroAMoraDespues) {
+            tr.classList.add("row-nuevo-mora");
+        }
 
         tr.innerHTML = `
             <td>${dni}</td>
-            <td>${cliente}</td>
+            <td><strong>${cliente}</strong></td>
             <td>${celularHTML}</td>
-            <td>${botonesHTML}</td>
+            <td style="text-align:center;">${botonesHTML}</td>
             <td>${producto}</td>
             <td>${cuotas}</td>
             <td>${fechaMostrada}</td>
@@ -615,7 +654,7 @@ function processData(rows) {
                 ${tramosFechasHTML}
             </td>
             <td>
-                <input type="text" class="compromiso-input" value="${compromisoExcel}" placeholder="Escribe aquí...">
+                <input type="text" class="compromiso-input" value="${compromisoExcel}" placeholder="Apunta el compromiso aquí...">
                 <div class="save-badge" style="font-size: 0.72em; color: #27ae60; min-height: 14px; margin-top: 2px; opacity: 0; transition: opacity 0.2s;"></div>
             </td>
             <td style="${montoStyle}">${montoHTML}</td>
@@ -647,17 +686,6 @@ function processData(rows) {
     const filtersSection = document.getElementById("filters-section");
     if (filtersSection) filtersSection.style.display = "flex";
 
-    const selects = document.querySelectorAll(".status-select");
-    selects.forEach(select => {
-        select.addEventListener("change", function() {
-            const tr = this.closest("tr");
-            if (this.value === "cancelo") tr.classList.add("row-cancelo");
-            else tr.classList.remove("row-cancelo");
-            recalcularResumen();
-            aplicarFiltrosTabla();
-        });
-    });
-
     const cartaChks = document.querySelectorAll(".carta-chk");
     cartaChks.forEach(chk => {
         chk.addEventListener("change", function() {
@@ -683,35 +711,118 @@ function processData(rows) {
         const tds = tr.querySelectorAll("td");
         const dni = String(tds[0].innerText).trim();
         
+        const btnLlamar = tds[3].querySelector(".btn-accion-llamar");
+        const btnWs = tds[3].querySelector(".btn-accion-ws");
+        const chkLlamado = tds[3].querySelector(".llamado-chk");
+        const txtLlamado = tds[3].querySelector(".llamado-text");
+        const lblLlamado = tds[3].querySelector(".llamado-label");
+
         const inputComp = tds[10].querySelector("input");
         const saveBadge = tds[10].querySelector(".save-badge");
         const chks = tds[12].querySelectorAll("input[type='checkbox']");
         const selectEst = tds[13].querySelector("select");
         
         const saved = gestionesGlobal[dni];
+
+        const actualizarEstiloLlamadoFila = (estaLlamado, fechaStr = "") => {
+            chkLlamado.checked = estaLlamado;
+            const enMora = tr.dataset.enMora === "si";
+            const cancelado = selectEst.value === "cancelo";
+            if (estaLlamado) {
+                txtLlamado.textContent = fechaStr ? `✓ Llamado (${fechaStr})` : "✓ Ya llamado";
+                lblLlamado.style.backgroundColor = "#d4efdf";
+                lblLlamado.style.color = "#1e8449";
+                lblLlamado.style.fontWeight = "bold";
+                tr.classList.remove("row-urgente-sin-llamar");
+            } else {
+                txtLlamado.textContent = enMora && !cancelado ? "🚨 Falta llamar" : "Falta llamar";
+                lblLlamado.style.backgroundColor = enMora && !cancelado ? "#fadbd8" : "#f1f2f6";
+                lblLlamado.style.color = enMora && !cancelado ? "#c0392b" : "#57606f";
+                lblLlamado.style.fontWeight = enMora && !cancelado ? "bold" : "normal";
+                if (enMora && !cancelado) {
+                    tr.classList.add("row-urgente-sin-llamar");
+                } else {
+                    tr.classList.remove("row-urgente-sin-llamar");
+                }
+            }
+        };
+
+        let fechaLlamadaActual = (saved && saved.fechaLlamada) ? saved.fechaLlamada : "";
+
         if (saved) {
             if (saved.compromiso !== undefined && saved.compromiso !== "") {
                 inputComp.value = saved.compromiso;
             }
             if (saved.carta1) { chks[0].checked = true; chks[0].dispatchEvent(new Event("change")); }
             if (saved.carta2) { chks[1].checked = true; chks[1].dispatchEvent(new Event("change")); }
-            if (saved.estado) { selectEst.value = saved.estado; selectEst.dispatchEvent(new Event("change")); }
+            if (saved.estado) {
+                selectEst.value = saved.estado;
+                if (saved.estado === "cancelo") tr.classList.add("row-cancelo");
+            }
         }
-        
+
+        const yaFueContactado = Boolean((saved && saved.llamado) || tieneCompromisoValido(inputComp.value));
+        actualizarEstiloLlamadoFila(yaFueContactado, fechaLlamadaActual);
+
+        const registrarContacto = (forzarLlamado = null, inmediato = true) => {
+            const estadoLlamado = forzarLlamado !== null ? forzarLlamado : (chkLlamado.checked || tieneCompromisoValido(inputComp.value));
+            if (estadoLlamado && !fechaLlamadaActual) {
+                fechaLlamadaActual = obtenerFechaHoraCorta();
+            }
+            // Si marca como llamado y el compromiso estaba vacío ("-"), anotar la fecha de llamada para que sincronice con su celular/PC
+            if (forzarLlamado === true && !tieneCompromisoValido(inputComp.value)) {
+                inputComp.value = `Llamado ${fechaLlamadaActual}`;
+            }
+            actualizarEstiloLlamadoFila(estadoLlamado, fechaLlamadaActual);
+            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, estadoLlamado, fechaLlamadaActual, inmediato, saveBadge);
+            recalcularResumen();
+            aplicarFiltrosTabla();
+        };
+
+        if (btnLlamar) {
+            btnLlamar.addEventListener("click", () => {
+                registrarContacto(true, true);
+            });
+        }
+        if (btnWs) {
+            btnWs.addEventListener("click", () => {
+                registrarContacto(true, true);
+            });
+        }
+        chkLlamado.addEventListener("change", () => {
+            if (!chkLlamado.checked && inputComp.value.startsWith("Llamado ")) {
+                inputComp.value = "-";
+            }
+            registrarContacto(chkLlamado.checked, true);
+        });
+
         inputComp.addEventListener("input", () => {
-            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, false, saveBadge);
+            const tieneComp = tieneCompromisoValido(inputComp.value);
+            if (tieneComp && !chkLlamado.checked) {
+                if (!fechaLlamadaActual) fechaLlamadaActual = obtenerFechaHoraCorta();
+                actualizarEstiloLlamadoFila(true, fechaLlamadaActual);
+            }
+            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, chkLlamado.checked || tieneComp, fechaLlamadaActual, false, saveBadge);
+            recalcularResumen();
         });
         inputComp.addEventListener("blur", () => {
-            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, true, saveBadge);
+            const tieneComp = tieneCompromisoValido(inputComp.value);
+            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, chkLlamado.checked || tieneComp, fechaLlamadaActual, true, saveBadge);
+            recalcularResumen();
         });
         chks[0].addEventListener("change", () => {
-            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, true, saveBadge);
+            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, chkLlamado.checked, fechaLlamadaActual, true, saveBadge);
         });
         chks[1].addEventListener("change", () => {
-            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, true, saveBadge);
+            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, chkLlamado.checked, fechaLlamadaActual, true, saveBadge);
         });
         selectEst.addEventListener("change", () => {
-            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, true, saveBadge);
+            if (selectEst.value === "cancelo") tr.classList.add("row-cancelo");
+            else tr.classList.remove("row-cancelo");
+            actualizarEstiloLlamadoFila(chkLlamado.checked, fechaLlamadaActual);
+            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, chkLlamado.checked, fechaLlamadaActual, true, saveBadge);
+            recalcularResumen();
+            aplicarFiltrosTabla();
         });
     });
 
@@ -722,7 +833,7 @@ function processData(rows) {
     btnExport.style.display = "inline-block";
     btnExport.onclick = () => {
         const ws_data = [];
-        ws_data.push(["DNI", "Cliente", "Teléfono", "Producto", "N° Cuotas", "Vencimiento", "Días Mora Actual", "Días Mora Cierre", "Tramo de Visita", "Fechas Tramo 0-8 días", "Fechas Tramo 9-30 días", "Compromiso de Pago", "Monto Adeudado", "Carta 1 a 8 días", "Carta 9 a 30 días", "Estado"]);
+        ws_data.push(["DNI", "Cliente", "Teléfono", "Contactado", "Producto", "N° Cuotas", "Vencimiento", "Días Mora Actual", "Días Mora Cierre", "Tramo de Visita", "Fechas Tramo 0-8 días", "Fechas Tramo 9-30 días", "Compromiso de Pago", "Monto Adeudado", "Carta 1 a 8 días", "Carta 9 a 30 días", "Estado"]);
         
         const rowsToExport = document.querySelectorAll("#table-body tr");
         rowsToExport.forEach(tr => {
@@ -732,6 +843,8 @@ function processData(rows) {
             const dni = tds[0].innerText.trim();
             const cli = tds[1].innerText.trim();
             const tel = tds[2].innerText.trim();
+            const chkLlam = tds[3].querySelector(".llamado-chk");
+            const contactado = (chkLlam && chkLlam.checked) ? "Sí" : "No";
             const prod = tds[4].innerText.trim();
             const cuo = tds[5].innerText.trim();
             const ven = tds[6].innerText.trim();
@@ -749,7 +862,7 @@ function processData(rows) {
             const c2 = chks[1].checked ? "Sí" : "No";
             const est = tds[13].querySelector("select").value;
             
-            ws_data.push([dni, cli, tel, prod, cuo, ven, ma, mc, tram, f0a8, f9a30, comp, monto, c1, c2, est]);
+            ws_data.push([dni, cli, tel, contactado, prod, cuo, ven, ma, mc, tram, f0a8, f9a30, comp, monto, c1, c2, est]);
         });
         
         const ws = XLSX.utils.aoa_to_sheet(ws_data);
@@ -763,7 +876,11 @@ function recalcularResumen() {
     let totalMonto = 0;
     let tramo1Count = 0;
     let tramo2Count = 0;
-    let tramo3Count = 0;
+    let sinLlamarMoraCount = 0;
+    let preventivaUrgenteCount = 0;
+
+    const nombresSinLlamar = [];
+    const nombresNuevosMora = [];
 
     const trs = document.querySelectorAll("#table-body tr");
     trs.forEach(tr => {
@@ -774,17 +891,66 @@ function recalcularResumen() {
 
         const monto = parseFloat(tr.dataset.monto || "0") || 0;
         const tramo = tr.dataset.tramo;
+        const enMora = tr.dataset.enMora === "si";
+        const nuevoMora = tr.dataset.nuevoMora === "si";
+        const prevUrgente = tr.dataset.preventivaUrgente === "si";
+        const chkLlamado = tr.querySelector(".llamado-chk");
+        const llamado = chkLlamado && chkLlamado.checked;
+        const nombre = tr.dataset.clienteNombre || "";
+        const diasMora = tr.dataset.diasMora || "0";
 
         totalMonto += monto;
         if (tramo === "tramo-1") tramo1Count++;
         else if (tramo === "tramo-2") tramo2Count++;
-        else if (tramo === "tramo-otro") tramo3Count++;
+
+        if (enMora && !llamado) {
+            sinLlamarMoraCount++;
+            nombresSinLlamar.push(`${nombre} (${diasMora}d)`);
+        }
+        if (nuevoMora && !llamado) {
+            nombresNuevosMora.push(`${nombre} (${diasMora}d)`);
+        }
+        if (prevUrgente && !llamado) {
+            preventivaUrgenteCount++;
+        }
     });
 
     document.getElementById("total-monto").textContent = `$${totalMonto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     document.getElementById("total-tramo-1").textContent = tramo1Count;
     document.getElementById("total-tramo-2").textContent = tramo2Count;
-    document.getElementById("total-tramo-3").textContent = tramo3Count;
+
+    const elSinLlamar = document.getElementById("total-sin-llamar");
+    if (elSinLlamar) elSinLlamar.textContent = sinLlamarMoraCount;
+
+    const elPreventiva = document.getElementById("total-preventiva");
+    if (elPreventiva) elPreventiva.textContent = preventivaUrgenteCount;
+
+    const countSinLlamarBtn = document.getElementById("count-sin-llamar");
+    if (countSinLlamarBtn) countSinLlamarBtn.textContent = sinLlamarMoraCount;
+
+    const countPrevBtn = document.getElementById("count-preventiva-urgente");
+    if (countPrevBtn) countPrevBtn.textContent = preventivaUrgenteCount;
+
+    const alertsBanner = document.getElementById("alerts-banner");
+    const alertsDetail = document.getElementById("alerts-detail");
+    if (alertsBanner && alertsDetail) {
+        if (sinLlamarMoraCount > 0 || preventivaUrgenteCount > 0) {
+            alertsBanner.style.display = "block";
+            let htmlAlertas = "";
+            if (nombresNuevosMora.length > 0) {
+                htmlAlertas += `<div><strong style="color:#c0392b;">&#9888; ¡CUIDADO! ${nombresNuevosMora.length} cliente(s) acaban de pasar a MORA y aún no los llamas:</strong> ${nombresNuevosMora.slice(0, 5).join(", ")}${nombresNuevosMora.length > 5 ? "..." : ""}</div>`;
+            }
+            if (sinLlamarMoraCount > 0) {
+                htmlAlertas += `<div><strong style="color:#e74c3c;">&#128222; Tienes ${sinLlamarMoraCount} cliente(s) en mora SIN LLAMAR ni compromiso:</strong> ${nombresSinLlamar.slice(0, 6).join(", ")}${nombresSinLlamar.length > 6 ? "..." : ""}</div>`;
+            }
+            if (preventivaUrgenteCount > 0) {
+                htmlAlertas += `<div><strong style="color:#d35400;">&#9200; Preventiva:</strong> Tienes <strong>${preventivaUrgenteCount} cliente(s)</strong> que vencen HOY o en los próximos 3 días. Llámalos antes de que caigan en mora.</div>`;
+            }
+            alertsDetail.innerHTML = htmlAlertas;
+        } else {
+            alertsBanner.style.display = "none";
+        }
+    }
 }
 
 function aplicarFiltrosTabla() {
@@ -800,11 +966,18 @@ function aplicarFiltrosTabla() {
         const cliente = (tr.dataset.cliente || "").toLowerCase();
         const tramo = tr.dataset.tramo || "";
         const enMora = tr.dataset.enMora === "si";
+        const nuevoMora = tr.dataset.nuevoMora === "si";
+        const prevUrgente = tr.dataset.preventivaUrgente === "si";
+        const chkLlamado = tr.querySelector(".llamado-chk");
+        const llamado = chkLlamado && chkLlamado.checked;
         const estado = tr.querySelector(".status-select")?.value || "pendiente";
 
         const matchSearch = !searchVal || dni.includes(searchVal) || cliente.includes(searchVal);
         let matchTramo = true;
-        if (tramoVal === "en-mora") matchTramo = enMora;
+        if (tramoVal === "sin-llamar-mora") matchTramo = (enMora && !llamado && estado !== "cancelo");
+        else if (tramoVal === "nuevos-mora") matchTramo = nuevoMora;
+        else if (tramoVal === "preventiva-urgente") matchTramo = prevUrgente;
+        else if (tramoVal === "en-mora") matchTramo = enMora;
         else if (tramoVal !== "todos") matchTramo = (tramo === tramoVal);
 
         const matchEstado = (estadoVal === "todos") || (estado === estadoVal);
