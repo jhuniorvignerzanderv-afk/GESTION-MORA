@@ -1,10 +1,100 @@
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8FX1qyTUnQKP0MZ3mEH5uU_tmqBSIRdlyeqRxhhR_SBPOn6io6ROg64gWtvkVMAvz/exec";
 
 let gestionesGlobal = {};
+const saveTimers = {};
+
+function cargarGestionesLocales() {
+    let localGestiones = {};
+    try {
+        const cached = localStorage.getItem("mora_cached_gestiones");
+        if (cached) {
+            localGestiones = JSON.parse(cached) || {};
+        }
+        // También recuperar cualquier clave individual mora_<dni> guardada previamente
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith("mora_") && key !== "mora_cached_rows" && key !== "mora_cached_gestiones") {
+                const dni = key.replace("mora_", "").trim();
+                try {
+                    const val = JSON.parse(localStorage.getItem(key));
+                    if (val && typeof val === "object") {
+                        const existing = localGestiones[dni];
+                        if (!existing || (val.updatedAt || 0) >= (existing.updatedAt || 0)) {
+                            localGestiones[dni] = val;
+                        }
+                    }
+                } catch (e) {}
+            }
+        }
+    } catch (e) {
+        console.error("Error leyendo gestiones locales:", e);
+    }
+    return localGestiones;
+}
+
+function fusionarGestiones(nubeGestiones, localGestiones) {
+    const resultado = {};
+    const dnis = new Set([
+        ...Object.keys(nubeGestiones || {}),
+        ...Object.keys(localGestiones || {})
+    ]);
+
+    dnis.forEach(rawDni => {
+        const dni = String(rawDni).trim();
+        const nube = (nubeGestiones && nubeGestiones[rawDni]) || {};
+        const local = (localGestiones && localGestiones[dni]) || {};
+
+        const nubeComp = String(nube.compromiso || "").trim();
+        const localComp = String(local.compromiso || "").trim();
+
+        // Si el dato local tiene cambios pendientes de subir (dirty) o si el local tiene compromiso apuntado y la nube está vacía ("-" o "")
+        if (local.dirty) {
+            resultado[dni] = {
+                compromiso: localComp !== "" ? local.compromiso : (nube.compromiso || "-"),
+                carta1: local.carta1 !== undefined ? Boolean(local.carta1) : Boolean(nube.carta1),
+                carta2: local.carta2 !== undefined ? Boolean(local.carta2) : Boolean(nube.carta2),
+                estado: local.estado || nube.estado || "pendiente",
+                updatedAt: local.updatedAt || Date.now(),
+                dirty: true
+            };
+        } else {
+            const usarCompromisoLocal = (localComp !== "" && localComp !== "-") && (nubeComp === "" || nubeComp === "-");
+            resultado[dni] = {
+                compromiso: usarCompromisoLocal ? local.compromiso : (nube.compromiso || local.compromiso || "-"),
+                carta1: Boolean(nube.carta1 || local.carta1),
+                carta2: Boolean(nube.carta2 || local.carta2),
+                estado: (nube.estado && nube.estado !== "pendiente") ? nube.estado : (local.estado || nube.estado || "pendiente"),
+                updatedAt: local.updatedAt || Date.now(),
+                dirty: false
+            };
+        }
+    });
+
+    return resultado;
+}
+
+// Inicializar gestionesGlobal con lo que ya esté guardado en el navegador
+gestionesGlobal = cargarGestionesLocales();
 
 document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("btn-sync").addEventListener("click", () => syncData(0));
     document.getElementById("excel-file").addEventListener("change", handleFile, false);
+
+    const filterSearch = document.getElementById("filter-search");
+    const filterTramo = document.getElementById("filter-tramo");
+    const filterEstado = document.getElementById("filter-estado");
+    if (filterSearch) filterSearch.addEventListener("input", aplicarFiltrosTabla);
+    if (filterTramo) filterTramo.addEventListener("change", aplicarFiltrosTabla);
+    if (filterEstado) filterEstado.addEventListener("change", aplicarFiltrosTabla);
+
+    // Mostrar inmediatamente datos en caché si existen para que no empiece en blanco
+    const cachedRows = localStorage.getItem("mora_cached_rows");
+    if (cachedRows) {
+        try {
+            processData(JSON.parse(cachedRows));
+        } catch (e) {}
+    }
+
     syncData(0);
 });
 
@@ -29,6 +119,10 @@ function handleFile(e) {
         statusEl.textContent = "Subiendo a la nube (esto puede tardar unos segundos)...";
         
         try {
+            // Asegurar que conservamos las gestiones locales actuales antes de procesar
+            const locales = cargarGestionesLocales();
+            gestionesGlobal = fusionarGestiones(gestionesGlobal, locales);
+
             // Guardar respaldo local y actualizar la interfaz inmediatamente
             localStorage.setItem("mora_cached_rows", JSON.stringify(rows));
             processData(rows);
@@ -42,15 +136,23 @@ function handleFile(e) {
             statusEl.textContent = "¡Base de datos enviada y actualizada!";
             statusEl.style.color = "#27ae60";
             
-            // Sincronizar de todos modos para obtener posibles gestiones nuevas
-            setTimeout(syncData, 3000);
+            // Sincronizar después para obtener posibles gestiones de otros dispositivos
+            setTimeout(() => syncData(0), 3500);
         } catch(err) {
             console.error(err);
-            statusEl.textContent = "Error al subir a la nube.";
-            statusEl.style.color = "#e74c3c";
+            statusEl.textContent = "Guardado en este dispositivo (Error al subir a la nube).";
+            statusEl.style.color = "#e67e22";
         }
     };
     reader.readAsArrayBuffer(file);
+}
+
+async function sincronizarPendientesConNube() {
+    const locales = cargarGestionesLocales();
+    const pendientes = Object.entries(locales).filter(([_, val]) => val && val.dirty);
+    for (const [dni, val] of pendientes) {
+        await enviarGestionANube(dni, val.compromiso, val.carta1, val.carta2, val.estado);
+    }
 }
 
 async function syncData(retryCount = 0) {
@@ -59,6 +161,9 @@ async function syncData(retryCount = 0) {
     statusEl.style.color = "#f39c12";
 
     try {
+        // Primero enviar cualquier gestión que haya quedado pendiente de subir
+        await sincronizarPendientesConNube();
+
         const urlNoCache = SCRIPT_URL + "?t=" + new Date().getTime();
         const response = await fetch(urlNoCache, {
             method: "GET",
@@ -70,17 +175,18 @@ async function syncData(retryCount = 0) {
         }
         const json = await response.json();
         
-        gestionesGlobal = json.gestiones || {};
+        const locales = cargarGestionesLocales();
+        gestionesGlobal = fusionarGestiones(json.gestiones || {}, locales);
         const rows = json.data || [];
         
         if (rows.length > 0 && Array.isArray(rows[0])) {
             localStorage.setItem("mora_cached_rows", JSON.stringify(rows));
             localStorage.setItem("mora_cached_gestiones", JSON.stringify(gestionesGlobal));
             processData(rows);
-            statusEl.textContent = "Sincronizado";
+            statusEl.textContent = "Sincronizado ✓";
             statusEl.style.color = "#27ae60";
         } else {
-            statusEl.textContent = "Sin datos. Pega tu Excel en la hoja Data de Google Sheets.";
+            statusEl.textContent = "Sin datos en la nube. Sube tu archivo Excel.";
             statusEl.style.color = "#e74c3c";
         }
     } catch(err) {
@@ -89,47 +195,129 @@ async function syncData(retryCount = 0) {
             setTimeout(() => syncData(retryCount + 1), 1500);
             return;
         }
-        // Intentar cargar respaldo local si falla la conexión
+        // Cargar respaldo local si falla la conexión
         const cachedRows = localStorage.getItem("mora_cached_rows");
-        const cachedGestiones = localStorage.getItem("mora_cached_gestiones");
         if (cachedRows) {
             try {
-                if (cachedGestiones) gestionesGlobal = JSON.parse(cachedGestiones);
+                gestionesGlobal = cargarGestionesLocales();
                 processData(JSON.parse(cachedRows));
-                statusEl.textContent = "Modo sin conexión (mostrando últimos datos guardados)";
+                statusEl.textContent = "Modo local (mostrando datos guardados en tu equipo)";
                 statusEl.style.color = "#e67e22";
                 return;
             } catch (e) {}
         }
-        statusEl.textContent = "Error de conexion (revisa tu internet o desactiva bloqueador de anuncios)";
+        statusEl.textContent = "Error de conexion (sube tu Excel para trabajar en modo local)";
         statusEl.style.color = "#e74c3c";
     }
 }
 
-async function updateGestionEnNube(dni, compromiso, carta1, carta2, estado) {
-    if (!gestionesGlobal[dni]) gestionesGlobal[dni] = {};
-    gestionesGlobal[dni].compromiso = compromiso;
-    gestionesGlobal[dni].carta1 = carta1;
-    gestionesGlobal[dni].carta2 = carta2;
-    gestionesGlobal[dni].estado = estado;
+function guardarGestionLocalInmediato(dni, compromiso, carta1, carta2, estado, dirty = true) {
+    const dniKey = String(dni).trim();
+    const registro = {
+        compromiso: compromiso,
+        carta1: Boolean(carta1),
+        carta2: Boolean(carta2),
+        estado: estado || "pendiente",
+        updatedAt: Date.now(),
+        dirty: dirty
+    };
+    gestionesGlobal[dniKey] = registro;
+    try {
+        localStorage.setItem("mora_" + dniKey, JSON.stringify(registro));
+        localStorage.setItem("mora_cached_gestiones", JSON.stringify(gestionesGlobal));
+    } catch (e) {
+        console.error("Error guardando en localStorage:", e);
+    }
+}
 
+async function enviarGestionANube(dni, compromiso, carta1, carta2, estado) {
+    const dniKey = String(dni).trim();
     const url = new URL(SCRIPT_URL);
     url.searchParams.append("action", "update");
-    url.searchParams.append("dni", dni);
+    url.searchParams.append("dni", dniKey);
     url.searchParams.append("compromiso", compromiso);
     url.searchParams.append("carta1", carta1);
     url.searchParams.append("carta2", carta2);
     url.searchParams.append("estado", estado);
+    url.searchParams.append("t", Date.now());
 
     try {
-        await fetch(url.toString(), { method: "GET" });
+        // mode: "no-cors" y keepalive: true garantizan que el envío llegue a Google Sheets incluso si cierras la pestaña inmediatamente
+        await fetch(url.toString(), {
+            method: "GET",
+            mode: "no-cors",
+            keepalive: true,
+            cache: "no-store"
+        });
+        guardarGestionLocalInmediato(dniKey, compromiso, carta1, carta2, estado, false);
+        return true;
     } catch(err) {
-        console.error("Error guardando gestion:", err);
+        console.error("Error guardando gestion en la nube:", err);
+        return false;
     }
 }
 
+function updateGestionEnNube(dni, compromiso, carta1, carta2, estado, inmediato = false, statusBadge = null) {
+    const dniKey = String(dni).trim();
+    // 1. Guardar instantáneamente en el navegador (nunca se pierde aunque cierre la ventana)
+    guardarGestionLocalInmediato(dniKey, compromiso, carta1, carta2, estado, true);
+
+    if (statusBadge) {
+        statusBadge.textContent = "✓ Guardado";
+        statusBadge.style.color = "#27ae60";
+        statusBadge.style.opacity = "1";
+    }
+
+    // 2. Enviar a la nube (con pequeño debounce si está escribiendo texto, o inmediato al salir/cambiar checkbox)
+    if (saveTimers[dniKey]) {
+        clearTimeout(saveTimers[dniKey]);
+    }
+
+    if (inmediato) {
+        enviarGestionANube(dniKey, compromiso, carta1, carta2, estado);
+    } else {
+        saveTimers[dniKey] = setTimeout(() => {
+            enviarGestionANube(dniKey, compromiso, carta1, carta2, estado);
+        }, 400);
+    }
+}
+
+function parsearFechaSegura(valor) {
+    if (!valor) return null;
+    if (valor instanceof Date && !isNaN(valor)) {
+        return new Date(valor.getFullYear(), valor.getMonth(), valor.getDate());
+    }
+    // Si es número serial de Excel (ej. 46295)
+    if (typeof valor === "number" && valor > 25000 && valor < 80000) {
+        const utcDays = Math.floor(valor - 25569);
+        const d = new Date(utcDays * 86400 * 1000);
+        return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    }
+    const str = String(valor).trim();
+    // Formato ISO YYYY-MM-DD...
+    const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) {
+        return new Date(parseInt(isoMatch[1], 10), parseInt(isoMatch[2], 10) - 1, parseInt(isoMatch[3], 10));
+    }
+    // Formato DD/MM/YYYY o DD-MM-YYYY
+    const dmyMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (dmyMatch) {
+        return new Date(parseInt(dmyMatch[3], 10), parseInt(dmyMatch[2], 10) - 1, parseInt(dmyMatch[1], 10));
+    }
+    const parsed = new Date(str);
+    if (!isNaN(parsed)) {
+        return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+    }
+    return null;
+}
+
+function formatShortDate(d) {
+    if (!d || isNaN(d)) return "-";
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+}
+
 function processData(rows) {
-    if (rows.length === 0) {
+    if (!rows || rows.length === 0) {
         alert("El archivo parece estar vacío.");
         return;
     }
@@ -162,12 +350,12 @@ function processData(rows) {
         };
 
         idxCliente = findExact(["nombre_cliente", "nombre cliente", "cliente"]);
-        idxVencimiento = findExact(["fecha compromiso", "vencimiento"]); 
+        idxVencimiento = findExact(["fecha compromiso", "vencimiento", "fecha de vencimiento", "fecha_vencimiento"]); 
         idxMonto = findExact(["saldo inicial", "monto adeudado", "monto"]);
         idxCompromiso = findExact(["compromiso", "compromiso de pago"]);
         idxAsesor = findExact(["oficial negocios actual", "asesor"]);
-        idxProceso = findExact(["fecha de proceso", "proceso"]); 
-        idxDiasMora = findExact(["dias de mora actual", "días mora actual", "das mora actual", "mora actual"]);
+        idxProceso = findExact(["fecha de proceso", "proceso", "fecha_proceso"]); 
+        idxDiasMora = findExact(["dias de mora actual", "días mora actual", "das mora actual", "mora actual", "dias_mora_actual"]);
         idxDiasMoraCierre = findExact(["dias de mora al cierre", "días mora cierre", "das mora cierre", "mora cierre"]);
         idxDni = findExact(["numero_documento", "numero documento", "dni", "documento"]);
         idxCelular = findExact(["celular_3", "telefono", "teléfono", "celular"]);
@@ -198,7 +386,7 @@ function processData(rows) {
         idxAmortizacion = -1;
     }
 
-    let datosFiltrados = dataRows.filter(row => row.length > 0 && row.some(cell => cell !== ""));
+    let datosFiltrados = dataRows.filter(row => Array.isArray(row) && row.length > 0 && row.some(cell => cell !== ""));
     
     if (idxAsesor !== -1 || idxAgencia !== -1) {
         datosFiltrados = datosFiltrados.filter(row => {
@@ -210,31 +398,114 @@ function processData(rows) {
         });
     }
 
-    let totalMonto = 0;
-    let tramo1Count = 0; 
-    let tramo2Count = 0; 
-    let tramo3Count = 0; 
+    const hoy = new Date();
+    const fechaHoy = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+    const fechaFallback = new Date(hoy.getFullYear(), hoy.getMonth(), 0);
+    fechaFallback.setHours(0, 0, 0, 0);
 
-    const fechaActual = new Date();
-    const fechaFallback = new Date(fechaActual.getFullYear(), fechaActual.getMonth(), 0);
-    fechaFallback.setHours(0,0,0,0);
+    let fechaReporteDetectada = null;
 
-    datosFiltrados.forEach(row => {
-        const dni = idxDni !== -1 ? (row[idxDni] || "-") : "-";
+    // Pre-procesar filas para calcular días de mora actualizados a hoy y poder ordenarlas por prioridad
+    const clientesProcesados = datosFiltrados.map(row => {
+        const dni = String(idxDni !== -1 ? (row[idxDni] || "-") : "-").trim();
         const cliente = row[idxCliente] || "-";
         const celular = idxCelular !== -1 ? (row[idxCelular] || "-") : "-";
         const producto = idxProducto !== -1 ? (row[idxProducto] || "-") : "-";
         const cuotas = idxCuotas !== -1 ? (row[idxCuotas] || "-") : "-";
         let procesoVal = idxProceso !== -1 ? row[idxProceso] : null;
-        const compromiso = idxCompromiso !== -1 ? (row[idxCompromiso] || "-") : "-";
-        
-        let montoOriginal = parseFloat(String(row[idxMonto]).replace(/[^0-9.-]+/g,"")) || 0;
-        let amortizacion = idxAmortizacion !== -1 ? (parseFloat(String(row[idxAmortizacion]).replace(/[^0-9.-]+/g,"")) || 0) : 0;
-        
+        const compromisoExcel = idxCompromiso !== -1 ? (row[idxCompromiso] || "-") : "-";
+
+        let montoOriginal = parseFloat(String(row[idxMonto]).replace(/[^0-9.-]+/g, "")) || 0;
+        let amortizacion = idxAmortizacion !== -1 ? (parseFloat(String(row[idxAmortizacion]).replace(/[^0-9.-]+/g, "")) || 0) : 0;
         let monto = montoOriginal - amortizacion;
-        if (monto < 0) monto = 0; 
-        totalMonto += monto;
-        
+        if (monto < 0) monto = 0;
+
+        let fechaBase = parsearFechaSegura(procesoVal) || new Date(fechaFallback);
+        if (!fechaReporteDetectada && procesoVal) {
+            fechaReporteDetectada = fechaBase;
+        }
+
+        let diasAtrasoExcel = idxDiasMora !== -1 && row[idxDiasMora] !== "" ? (parseInt(row[idxDiasMora], 10) || 0) : 0;
+
+        // Fecha de vencimiento exacta del préstamo/cuota
+        let fechaVenc = new Date(fechaBase.getFullYear(), fechaBase.getMonth(), fechaBase.getDate());
+        fechaVenc.setDate(fechaVenc.getDate() - diasAtrasoExcel);
+
+        // Días transcurridos desde la fecha de proceso del Excel hasta el día de HOY
+        const diasTranscurridosDesdeReporte = Math.round((fechaHoy.getTime() - fechaBase.getTime()) / (1000 * 60 * 60 * 24));
+
+        // Cálculo automático de los días de mora reales al día de HOY
+        let diasAtrasoRealHoy = diasAtrasoExcel;
+        if (diasTranscurridosDesdeReporte > 0) {
+            diasAtrasoRealHoy = Math.round((fechaHoy.getTime() - fechaVenc.getTime()) / (1000 * 60 * 60 * 24));
+        }
+
+        const diasAtrasoMostrar = diasAtrasoRealHoy < 0 ? 0 : diasAtrasoRealHoy;
+        const entroAMoraDespues = (diasAtrasoExcel <= 0 && diasAtrasoRealHoy >= 1);
+
+        // Si Días Mora Cierre está en el Excel, también ajustarlo con base en los días reales si corresponde
+        let diasAtrasoCierre = idxDiasMoraCierre !== -1 && row[idxDiasMoraCierre] !== "" ? (parseInt(row[idxDiasMoraCierre], 10) || 0) : "-";
+
+        return {
+            dni,
+            cliente,
+            celular,
+            producto,
+            cuotas,
+            compromisoExcel,
+            montoOriginal,
+            amortizacion,
+            monto,
+            fechaBase,
+            fechaVenc,
+            diasAtrasoExcel,
+            diasAtrasoRealHoy,
+            diasAtrasoMostrar,
+            diasTranscurridosDesdeReporte,
+            entroAMoraDespues,
+            diasAtrasoCierre
+        };
+    });
+
+    // Ordenar: primero los que están en mora hoy (de mayor a menor atraso, o tramo 1-8 y 9-30 arriba), y luego los que están por vencer
+    clientesProcesados.sort((a, b) => {
+        const aEnMora = a.diasAtrasoMostrar >= 1 ? 1 : 0;
+        const bEnMora = b.diasAtrasoMostrar >= 1 ? 1 : 0;
+        if (aEnMora !== bEnMora) return bEnMora - aEnMora;
+        if (aEnMora === 1) {
+            return b.diasAtrasoMostrar - a.diasAtrasoMostrar;
+        }
+        // Para los que aún no vencen (preventiva), mostrar primero los más próximos a vencer (ej. 0, -1, -2...)
+        return b.diasAtrasoRealHoy - a.diasAtrasoRealHoy;
+    });
+
+    const infoActEl = document.getElementById("info-actualizacion");
+    if (infoActEl) {
+        const strReporte = fechaReporteDetectada ? formatShortDate(fechaReporteDetectada) : formatShortDate(fechaFallback);
+        const strHoy = formatShortDate(fechaHoy);
+        infoActEl.innerHTML = `&#128197; Corte Excel: <strong>${strReporte}</strong> &rarr; Actualizado a Hoy: <strong>${strHoy}</strong>`;
+    }
+
+    clientesProcesados.forEach(item => {
+        const {
+            dni,
+            cliente,
+            celular,
+            producto,
+            cuotas,
+            compromisoExcel,
+            montoOriginal,
+            amortizacion,
+            monto,
+            fechaVenc,
+            diasAtrasoExcel,
+            diasAtrasoRealHoy,
+            diasAtrasoMostrar,
+            diasTranscurridosDesdeReporte,
+            entroAMoraDespues,
+            diasAtrasoCierre
+        } = item;
+
         let montoStyle = "text-align: right;";
         let montoHTML = `$${monto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
         if (amortizacion > 0) {
@@ -246,25 +517,7 @@ function processData(rows) {
             `;
         }
 
-        let diasAtrasoActual = 0;
-        let diasAtrasoCierre = 0; 
-        let tramoStr = "Al día";
-        let tramoClass = "tramo-al-dia";
-        let fechaMostrada = "-";
-
-        let fechaBase = new Date(fechaFallback);
-        if (procesoVal) {
-            let parsedProceso = new Date(procesoVal);
-            if (!isNaN(parsedProceso)) fechaBase = parsedProceso;
-        }
-        fechaBase.setHours(0,0,0,0);
-
-        let diasAtrasoActualRaw = idxDiasMora !== -1 ? (parseInt(row[idxDiasMora], 10) || 0) : 0;
-        diasAtrasoActual = diasAtrasoActualRaw;
-        
-        let fechaVenc = new Date(fechaBase);
-        fechaVenc.setDate(fechaBase.getDate() - diasAtrasoActualRaw);
-        fechaMostrada = fechaVenc.toLocaleDateString();
+        const fechaMostrada = formatShortDate(fechaVenc);
 
         // Calcular rangos de fechas para tramos de visita (0-8 días y 9-30 días desde el vencimiento)
         let fTramo1Fin = new Date(fechaVenc);
@@ -274,25 +527,39 @@ function processData(rows) {
         let fTramo2Fin = new Date(fechaVenc);
         fTramo2Fin.setDate(fechaVenc.getDate() + 30);
 
-        const formatShortDate = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
         const rango0a8 = `${formatShortDate(fechaVenc)} al ${formatShortDate(fTramo1Fin)}`;
         const rango9a30 = `${formatShortDate(fTramo2Ini)} al ${formatShortDate(fTramo2Fin)}`;
 
-        diasAtrasoCierre = idxDiasMoraCierre !== -1 && row[idxDiasMoraCierre] !== "" ? (parseInt(row[idxDiasMoraCierre], 10) || 0) : "-";
-        if (diasAtrasoActual < 0) diasAtrasoActual = 0;
+        let tramoStr = "Al día";
+        let tramoClass = "tramo-al-dia";
+        let tramoFilterKey = "al-dia";
 
-        if (diasAtrasoActual >= 1 && diasAtrasoActual <= 8) {
+        if (diasAtrasoMostrar >= 1 && diasAtrasoMostrar <= 8) {
             tramoStr = "Tramo 1 a 8 días";
             tramoClass = "tramo-1";
-            tramo1Count++;
-        } else if (diasAtrasoActual >= 9 && diasAtrasoActual <= 30) {
+            tramoFilterKey = "tramo-1";
+        } else if (diasAtrasoMostrar >= 9 && diasAtrasoMostrar <= 30) {
             tramoStr = "Tramo 9 a 30 días";
             tramoClass = "tramo-2";
-            tramo2Count++;
-        } else if (diasAtrasoActual > 30) {
+            tramoFilterKey = "tramo-2";
+        } else if (diasAtrasoMostrar > 30) {
             tramoStr = "Mayor a 30 días";
             tramoClass = "tramo-otro";
-            tramo3Count++;
+            tramoFilterKey = "tramo-otro";
+        } else if (diasAtrasoRealHoy < 0) {
+            tramoStr = `Al día (vence en ${Math.abs(diasAtrasoRealHoy)}d)`;
+        } else if (diasAtrasoRealHoy === 0) {
+            tramoStr = "Vence hoy (0 días)";
+        }
+
+        // Mostrar detalle de actualización automática de mora
+        let detalleMoraHTML = `<div style="font-weight: bold; font-size: 1.05em;">${diasAtrasoMostrar}</div>`;
+        if (diasTranscurridosDesdeReporte > 0) {
+            if (entroAMoraDespues) {
+                detalleMoraHTML += `<div style="font-size: 0.72em; color: #c0392b; background: #FDEDEC; padding: 2px 4px; border-radius: 3px; margin-top: 2px; font-weight: bold;">&#9888; Pasó a mora (Excel: ${diasAtrasoExcel}d)</div>`;
+            } else if (diasAtrasoMostrar !== diasAtrasoExcel) {
+                detalleMoraHTML += `<div style="font-size: 0.72em; color: #7f8c8d; margin-top: 2px;">En Excel: ${diasAtrasoExcel}d</div>`;
+            }
         }
 
         let tramosFechasHTML = `
@@ -305,10 +572,10 @@ function processData(rows) {
         const horaActual = new Date().getHours();
         let saludo = horaActual >= 12 && horaActual < 19 ? "Buenas tardes" : (horaActual >= 19 ? "Buenas noches" : "Buenos días");
         let textoWhatsapp = `${saludo}, mi nombre es Jhunior Vargas, asesor de negocios de Agrobanco. Le escribo para comentarle que su préstamo `;
-        if (diasAtrasoActualRaw <= 0) {
+        if (diasAtrasoRealHoy <= 0) {
             textoWhatsapp += `está próximo a vencer el día ${fechaMostrada}. Por favor comunicarse conmigo para poder apoyarle.`;
         } else {
-            textoWhatsapp += `cuenta con ${diasAtrasoActualRaw} días de atraso, porque venció el día ${fechaMostrada}. Por favor comunicarse conmigo para poder apoyarle.`;
+            textoWhatsapp += `cuenta con ${diasAtrasoMostrar} días de atraso, porque venció el día ${fechaMostrada}. Por favor comunicarse conmigo para poder apoyarle.`;
         }
         
         let cleanPhone = String(celular).replace(/\D/g, "");
@@ -327,6 +594,12 @@ function processData(rows) {
         }
 
         const tr = document.createElement("tr");
+        tr.dataset.dni = dni;
+        tr.dataset.cliente = String(cliente).toLowerCase();
+        tr.dataset.tramo = tramoFilterKey;
+        tr.dataset.enMora = diasAtrasoMostrar >= 1 ? "si" : "no";
+        tr.dataset.monto = monto;
+
         tr.innerHTML = `
             <td>${dni}</td>
             <td>${cliente}</td>
@@ -335,13 +608,16 @@ function processData(rows) {
             <td>${producto}</td>
             <td>${cuotas}</td>
             <td>${fechaMostrada}</td>
-            <td>${diasAtrasoActual}</td>
+            <td>${detalleMoraHTML}</td>
             <td>${diasAtrasoCierre}</td>
             <td class="${tramoClass}">
                 <div>${tramoStr}</div>
                 ${tramosFechasHTML}
             </td>
-            <td><input type="text" class="compromiso-input" value="${compromiso}" placeholder="Escribe aquí..."></td>
+            <td>
+                <input type="text" class="compromiso-input" value="${compromisoExcel}" placeholder="Escribe aquí...">
+                <div class="save-badge" style="font-size: 0.72em; color: #27ae60; min-height: 14px; margin-top: 2px; opacity: 0; transition: opacity 0.2s;"></div>
+            </td>
             <td style="${montoStyle}">${montoHTML}</td>
             <td class="cartas-td">
                 <label class="carta-label" style="display:block; font-size:0.85em; cursor:pointer; margin-bottom:4px;" title="Rango: ${rango0a8}">
@@ -361,17 +637,15 @@ function processData(rows) {
         tableBody.appendChild(tr);
     });
 
-    if (datosFiltrados.length === 0) {
+    if (clientesProcesados.length === 0) {
         const tr = document.createElement("tr");
         tr.innerHTML = `<td colspan="14" class="empty-state">No se encontraron datos para mostrar.</td>`;
         tableBody.appendChild(tr);
     }
 
-    document.getElementById("total-monto").textContent = `$${totalMonto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-    document.getElementById("total-tramo-1").textContent = tramo1Count;
-    document.getElementById("total-tramo-2").textContent = tramo2Count;
-    document.getElementById("total-tramo-3").textContent = tramo3Count;
     document.getElementById("summary-section").style.display = "flex";
+    const filtersSection = document.getElementById("filters-section");
+    if (filtersSection) filtersSection.style.display = "flex";
 
     const selects = document.querySelectorAll(".status-select");
     selects.forEach(select => {
@@ -379,6 +653,8 @@ function processData(rows) {
             const tr = this.closest("tr");
             if (this.value === "cancelo") tr.classList.add("row-cancelo");
             else tr.classList.remove("row-cancelo");
+            recalcularResumen();
+            aplicarFiltrosTabla();
         });
     });
 
@@ -405,29 +681,42 @@ function processData(rows) {
     trs.forEach(tr => {
         if (tr.querySelector(".empty-state")) return;
         const tds = tr.querySelectorAll("td");
-        const dni = tds[0].innerText;
+        const dni = String(tds[0].innerText).trim();
         
         const inputComp = tds[10].querySelector("input");
+        const saveBadge = tds[10].querySelector(".save-badge");
         const chks = tds[12].querySelectorAll("input[type='checkbox']");
         const selectEst = tds[13].querySelector("select");
         
         const saved = gestionesGlobal[dni];
         if (saved) {
-            if (saved.compromiso) inputComp.value = saved.compromiso;
+            if (saved.compromiso !== undefined && saved.compromiso !== "") {
+                inputComp.value = saved.compromiso;
+            }
             if (saved.carta1) { chks[0].checked = true; chks[0].dispatchEvent(new Event("change")); }
             if (saved.carta2) { chks[1].checked = true; chks[1].dispatchEvent(new Event("change")); }
             if (saved.estado) { selectEst.value = saved.estado; selectEst.dispatchEvent(new Event("change")); }
         }
         
-        const saveState = () => {
-            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value);
-        };
-        
-        inputComp.addEventListener("input", saveState);
-        chks[0].addEventListener("change", saveState);
-        chks[1].addEventListener("change", saveState);
-        selectEst.addEventListener("change", saveState);
+        inputComp.addEventListener("input", () => {
+            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, false, saveBadge);
+        });
+        inputComp.addEventListener("blur", () => {
+            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, true, saveBadge);
+        });
+        chks[0].addEventListener("change", () => {
+            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, true, saveBadge);
+        });
+        chks[1].addEventListener("change", () => {
+            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, true, saveBadge);
+        });
+        selectEst.addEventListener("change", () => {
+            updateGestionEnNube(dni, inputComp.value, chks[0].checked, chks[1].checked, selectEst.value, true, saveBadge);
+        });
     });
+
+    recalcularResumen();
+    aplicarFiltrosTabla();
 
     const btnExport = document.getElementById("btn-export");
     btnExport.style.display = "inline-block";
@@ -437,17 +726,17 @@ function processData(rows) {
         
         const rowsToExport = document.querySelectorAll("#table-body tr");
         rowsToExport.forEach(tr => {
-            if(tr.querySelector(".empty-state")) return;
+            if(tr.querySelector(".empty-state") || tr.style.display === "none") return;
             const tds = tr.querySelectorAll("td");
             
-            const dni = tds[0].innerText;
-            const cli = tds[1].innerText;
-            const tel = tds[2].innerText;
-            const prod = tds[4].innerText;
-            const cuo = tds[5].innerText;
-            const ven = tds[6].innerText;
-            const ma = tds[7].innerText;
-            const mc = tds[8].innerText;
+            const dni = tds[0].innerText.trim();
+            const cli = tds[1].innerText.trim();
+            const tel = tds[2].innerText.trim();
+            const prod = tds[4].innerText.trim();
+            const cuo = tds[5].innerText.trim();
+            const ven = tds[6].innerText.trim();
+            const ma = tds[7].innerText.split("\n")[0].trim();
+            const mc = tds[8].innerText.trim();
             const tramLines = tds[9].innerText.split("\n").map(s => s.trim()).filter(Boolean);
             const tram = tramLines[0] || "";
             const f0a8 = (tramLines[1] || "").replace("0-8d:", "").trim();
@@ -468,4 +757,58 @@ function processData(rows) {
         XLSX.utils.book_append_sheet(wb, ws, "Gestión Mora");
         XLSX.writeFile(wb, "Gestion_Actualizada.xlsx");
     };
+}
+
+function recalcularResumen() {
+    let totalMonto = 0;
+    let tramo1Count = 0;
+    let tramo2Count = 0;
+    let tramo3Count = 0;
+
+    const trs = document.querySelectorAll("#table-body tr");
+    trs.forEach(tr => {
+        if (tr.querySelector(".empty-state")) return;
+        const selectEst = tr.querySelector(".status-select");
+        const cancelado = selectEst && selectEst.value === "cancelo";
+        if (cancelado) return;
+
+        const monto = parseFloat(tr.dataset.monto || "0") || 0;
+        const tramo = tr.dataset.tramo;
+
+        totalMonto += monto;
+        if (tramo === "tramo-1") tramo1Count++;
+        else if (tramo === "tramo-2") tramo2Count++;
+        else if (tramo === "tramo-otro") tramo3Count++;
+    });
+
+    document.getElementById("total-monto").textContent = `$${totalMonto.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    document.getElementById("total-tramo-1").textContent = tramo1Count;
+    document.getElementById("total-tramo-2").textContent = tramo2Count;
+    document.getElementById("total-tramo-3").textContent = tramo3Count;
+}
+
+function aplicarFiltrosTabla() {
+    const searchVal = (document.getElementById("filter-search")?.value || "").toLowerCase().trim();
+    const tramoVal = document.getElementById("filter-tramo")?.value || "todos";
+    const estadoVal = document.getElementById("filter-estado")?.value || "todos";
+
+    const trs = document.querySelectorAll("#table-body tr");
+    trs.forEach(tr => {
+        if (tr.querySelector(".empty-state")) return;
+
+        const dni = (tr.dataset.dni || "").toLowerCase();
+        const cliente = (tr.dataset.cliente || "").toLowerCase();
+        const tramo = tr.dataset.tramo || "";
+        const enMora = tr.dataset.enMora === "si";
+        const estado = tr.querySelector(".status-select")?.value || "pendiente";
+
+        const matchSearch = !searchVal || dni.includes(searchVal) || cliente.includes(searchVal);
+        let matchTramo = true;
+        if (tramoVal === "en-mora") matchTramo = enMora;
+        else if (tramoVal !== "todos") matchTramo = (tramo === tramoVal);
+
+        const matchEstado = (estadoVal === "todos") || (estado === estadoVal);
+
+        tr.style.display = (matchSearch && matchTramo && matchEstado) ? "" : "none";
+    });
 }

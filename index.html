@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Control de Morosidad</title>
-    <link rel="stylesheet" href="style.css?v=16">
+    <link rel="stylesheet" href="style.css?v=23">
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
@@ -25,7 +25,7 @@
                 <button id="btn-export" class="file-label" style="background-color: #27ae60; border: none; display: none;">&#128202; Descargar Excel</button>
             </div>
             <div class="instructions">
-                <p><strong>Nota:</strong> Al subir un Excel, se actualizará tu base de datos en la nube para todos tus dispositivos.</p>
+                <p><strong>Nota:</strong> Los días de mora se actualizan automáticamente día a día según la fecha de hoy. Tus compromisos de pago se guardan al instante en tu dispositivo y en la nube.</p>
             </div>
         </section>
 
@@ -46,6 +46,26 @@
                 <h3>Otros tramos (>30 días)</h3>
                 <p id="total-tramo-3">0</p>
             </div>
+        </section>
+
+        <section class="filters-section" id="filters-section" style="display: none; margin-bottom: 20px; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between; background: #f8f9fa; padding: 12px 15px; border-radius: 8px; border: 1px solid #e1e8ed;">
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; flex: 1;">
+                <input type="text" id="filter-search" placeholder="&#128269; Buscar por cliente o DNI..." style="padding: 8px 12px; border: 1px solid #bdc3c7; border-radius: 6px; min-width: 220px; font-size: 0.9rem;">
+                <select id="filter-tramo" style="padding: 8px 12px; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 0.9rem; cursor: pointer;">
+                    <option value="todos">Todos los tramos</option>
+                    <option value="en-mora">Solo en Mora (&ge; 1 día)</option>
+                    <option value="tramo-1">Tramo 1 a 8 días</option>
+                    <option value="tramo-2">Tramo 9 a 30 días</option>
+                    <option value="tramo-otro">Mayor a 30 días</option>
+                    <option value="al-dia">Al día / Preventiva (0 días)</option>
+                </select>
+                <select id="filter-estado" style="padding: 8px 12px; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 0.9rem; cursor: pointer;">
+                    <option value="todos">Todos los estados</option>
+                    <option value="pendiente">Solo Pendientes</option>
+                    <option value="cancelo">Solo Cancelados</option>
+                </select>
+            </div>
+            <div id="info-actualizacion" style="font-size: 0.82rem; color: #2c3e50; background: #eaf2f8; padding: 6px 10px; border-radius: 5px; font-weight: 600;"></div>
         </section>
 
         <section class="table-section">
@@ -79,6 +99,6 @@
         </section>
     </div>
 
-    <script src="app.js?v=22"></script>
+    <script src="app.js?v=23"></script>
 </body>
 </html>
