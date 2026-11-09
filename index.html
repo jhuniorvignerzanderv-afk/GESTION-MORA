@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Control de Morosidad</title>
-    <link rel="stylesheet" href="style.css?v=23">
+    <title>Control de Morosidad por Mes - Agrobanco</title>
+    <link rel="stylesheet" href="style.css?v=27">
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
@@ -13,44 +13,102 @@
             <h1>Control de Morosidad y Tramos de Visita</h1>
         </header>
 
+        <!-- Barra de Meses del Año (Enero a Diciembre) -->
+        <section class="months-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 10px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <strong style="color: #2c3e50; font-size: 0.95rem;">&#128197; Año:</strong>
+                    <select id="select-year" style="padding: 6px 12px; border-radius: 6px; border: 1px solid #3498db; font-weight: bold; color: #2c3e50; cursor: pointer;">
+                        <option value="2025">2025</option>
+                        <option value="2026" selected>2026</option>
+                        <option value="2027">2027</option>
+                        <option value="2028">2028</option>
+                    </select>
+                </div>
+                <div id="mes-activo-badge" style="background: #2c3e50; color: white; padding: 6px 14px; border-radius: 20px; font-size: 0.88rem; font-weight: bold;">
+                    Mes seleccionado: Noviembre 2026
+                </div>
+            </div>
+            <div class="months-tabs" id="months-tabs">
+                <button class="month-tab" data-month="0">Enero</button>
+                <button class="month-tab" data-month="1">Febrero</button>
+                <button class="month-tab" data-month="2">Marzo</button>
+                <button class="month-tab" data-month="3">Abril</button>
+                <button class="month-tab" data-month="4">Mayo</button>
+                <button class="month-tab" data-month="5">Junio</button>
+                <button class="month-tab" data-month="6">Julio</button>
+                <button class="month-tab" data-month="7">Agosto</button>
+                <button class="month-tab" data-month="8">Septiembre</button>
+                <button class="month-tab" data-month="9">Octubre</button>
+                <button class="month-tab" data-month="10">Noviembre</button>
+                <button class="month-tab" data-month="11">Diciembre</button>
+            </div>
+        </section>
+
         <section class="upload-section">
-            <div class="file-input-wrapper" style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; align-items: center;">
+            <div class="file-input-wrapper" style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; align-items: center;">
                 <label for="excel-file" class="file-label" style="background-color: #9b59b6; cursor: pointer;">
-                    <span id="file-name">&#128194; Subir Archivo Excel</span>
+                    <span id="file-name">&#128194; Subir / Actualizar Excel de la Semana</span>
                 </label>
                 <input type="file" id="excel-file" accept=".xlsx, .xls" style="display:none;" />
                 
                 <button id="btn-sync" class="file-label" style="background-color: #3498db; border: none; cursor: pointer; color: white;">&#128259; Sincronizar Datos</button>
+                <button id="btn-export" class="file-label" style="background-color: #27ae60; border: none; display: none;">&#128202; Descargar Excel del Mes</button>
+                <button id="btn-clear-month" class="file-label" style="background-color: #95a5a6; border: none; cursor: pointer; color: white; font-size: 0.85rem; padding: 10px 14px;" title="Borrar datos solo de este mes si deseas empezar de cero">&#128465; Limpiar Mes</button>
                 <span id="sync-status" style="font-weight: bold; color: #7f8c8d;"></span>
-                <button id="btn-export" class="file-label" style="background-color: #27ae60; border: none; display: none;">&#128202; Descargar Excel</button>
             </div>
             <div class="instructions">
-                <p><strong>Nota:</strong> Los días de mora se actualizan automáticamente día a día según la fecha de hoy. Tus compromisos de pago se guardan al instante en tu dispositivo y en la nube.</p>
+                <p><strong>Actualización Semanal Inteligente:</strong> Al subir el Excel de la siguiente semana en el mismo mes, se actualizan los saldos y días de mora, se agregan los clientes nuevos y se <strong>conservan tus compromisos, fechas de promesa, llamadas y cartas</strong>.</p>
             </div>
         </section>
 
+        <!-- Barra de Progreso de Recuperación del Mes -->
+        <section id="recovery-section" style="display: none; background: #fff; border: 1px solid #dce4ec; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
+                <div style="font-weight: bold; color: #2c3e50; font-size: 0.95rem;">
+                    &#127919; Avance de Recuperación / Reducción de Mora (<span id="recovery-month-label">Mes</span>)
+                </div>
+                <div style="display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.88rem;">
+                    <div><strong>Cartera Total del Mes:</strong> <span id="rec-total-mes" style="color: #2c3e50;">$0.00</span></div>
+                    <div><strong>Recuperado / Canceló:</strong> <span id="rec-recuperado-mes" style="color: #27ae60; font-weight: bold;">$0.00 (0%)</span></div>
+                    <div><strong>Saldo Pendiente Activo:</strong> <span id="rec-pendiente-mes" style="color: #c0392b; font-weight: bold;">$0.00</span></div>
+                </div>
+            </div>
+            <div style="width: 100%; height: 12px; background: #ecf0f1; border-radius: 6px; overflow: hidden;">
+                <div id="rec-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #2ecc71, #27ae60); transition: width 0.4s ease;"></div>
+            </div>
+        </section>
+
+        <!-- Panel de Alertas Urgentes -->
         <section class="alerts-banner" id="alerts-banner" style="display: none; margin-bottom: 20px; border-radius: 8px; overflow: hidden; border: 2px solid #e74c3c; background-color: #fff5f5; box-shadow: 0 3px 8px rgba(231, 76, 60, 0.15);">
             <div style="background-color: #e74c3c; color: white; padding: 10px 15px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-                <div style="font-weight: bold; font-size: 1rem;">
-                    &#128680; ALERTA URGENTE DE GESTIÓN TELEFÓNICA (Para evitar llamadas de atención)
+                <div style="font-weight: bold; font-size: 0.98rem;">
+                    &#128680; PANEL DE ALERTAS URGENTES DEL ASESOR
                 </div>
-                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                    <button id="btn-ver-sin-llamar" style="background: white; color: #c0392b; border: none; padding: 5px 12px; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 0.85rem;">Ver Clientes EN MORA sin llamar (<span id="count-sin-llamar">0</span>)</button>
-                    <button id="btn-ver-preventiva" style="background: #f39c12; color: white; border: none; padding: 5px 12px; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 0.85rem;">Ver Próximos a Vencer (0 a 3 días) (<span id="count-preventiva-urgente">0</span>)</button>
-                    <button id="btn-ver-todos-alerta" style="background: #2c3e50; color: white; border: none; padding: 5px 12px; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 0.85rem;">Mostrar Todos</button>
+                <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                    <button id="btn-ver-sin-llamar" style="background: white; color: #c0392b; border: none; padding: 5px 10px; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 0.82rem;">&#128222; Sin Llamar (<span id="count-sin-llamar">0</span>)</button>
+                    <button id="btn-ver-promesas-hoy" style="background: #f1c40f; color: #2c3e50; border: none; padding: 5px 10px; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 0.82rem;">&#128176; Promesas Hoy/Vencidas (<span id="count-promesas-hoy">0</span>)</button>
+                    <button id="btn-ver-falta-foto" style="background: #e67e22; color: white; border: none; padding: 5px 10px; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 0.82rem;">&#128248; Urgente Foto/Carta (<span id="count-falta-foto">0</span>)</button>
+                    <button id="btn-ver-preventiva" style="background: #3498db; color: white; border: none; padding: 5px 10px; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 0.82rem;">&#9200; Por Vencer 0-3d (<span id="count-preventiva-urgente">0</span>)</button>
+                    <button id="btn-ver-todos-alerta" style="background: #2c3e50; color: white; border: none; padding: 5px 10px; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 0.82rem;">Ver Todos</button>
                 </div>
             </div>
-            <div id="alerts-detail" style="padding: 12px 15px; font-size: 0.9rem; color: #2c3e50; display: flex; flex-direction: column; gap: 6px;"></div>
+            <div id="alerts-detail" style="padding: 12px 15px; font-size: 0.88rem; color: #2c3e50; display: flex; flex-direction: column; gap: 6px;"></div>
         </section>
 
-        <section class="summary-section" id="summary-section" style="display: none;">
+        <!-- Tarjetas de Resumen -->
+        <section class="summary-section" id="summary-section" style="display: none; flex-wrap: wrap;">
             <div class="summary-card" style="cursor: pointer;" onclick="filtrarRapido('todos')" title="Haz clic para ver todos">
-                <h3>Total Adeudado</h3>
+                <h3>Saldo Pendiente</h3>
                 <p id="total-monto">.00</p>
             </div>
             <div class="summary-card" style="border-left-color: #e74c3c; cursor: pointer;" onclick="filtrarRapido('sin-llamar-mora')" title="Haz clic para ver a quiénes te falta llamar hoy">
                 <h3 style="color: #c0392b; font-weight: bold;">&#128222; En Mora SIN Llamar</h3>
                 <p id="total-sin-llamar" style="color: #e74c3c;">0</p>
+            </div>
+            <div class="summary-card" style="border-left-color: #f1c40f; cursor: pointer;" onclick="filtrarRapido('promesas-hoy')" title="Clientes con fecha de compromiso para hoy o vencida">
+                <h3 style="color: #b7950b; font-weight: bold;">&#128176; Promesas Hoy/Venc.</h3>
+                <p id="total-promesas-hoy" style="color: #d68910;">0</p>
             </div>
             <div class="summary-card" style="border-left-color: #e67e22; cursor: pointer;" onclick="filtrarRapido('tramo-1')" title="Haz clic para filtrar Tramo 1-8 días">
                 <h3>Visitas Tramo 1-8 días</h3>
@@ -60,18 +118,27 @@
                 <h3>Visitas Tramo 9-30 días</h3>
                 <p id="total-tramo-2">0</p>
             </div>
-            <div class="summary-card" style="border-left-color: #f39c12; cursor: pointer;" onclick="filtrarRapido('preventiva-urgente')" title="Haz clic para ver los que vencen hoy o en 3 días">
+            <div class="summary-card" style="border-left-color: #3498db; cursor: pointer;" onclick="filtrarRapido('preventiva-urgente')" title="Haz clic para ver los que vencen hoy o en 3 días">
                 <h3>&#9200; Vencen en 0-3 días</h3>
-                <p id="total-preventiva" style="color: #d35400;">0</p>
+                <p id="total-preventiva" style="color: #2980b9;">0</p>
             </div>
         </section>
 
-        <section class="filters-section" id="filters-section" style="display: none; margin-bottom: 20px; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between; background: #f8f9fa; padding: 12px 15px; border-radius: 8px; border: 1px solid #e1e8ed;">
+        <!-- Barra de Búsqueda, Filtro por Distrito (Ruta de Campo) y Tramos -->
+        <section class="filters-section" id="filters-section" style="display: none; margin-bottom: 20px; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between; background: #f8f9fa; padding: 12px 15px; border-radius: 8px; border: 1px solid #e1e8ed;">
             <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; flex: 1;">
-                <input type="text" id="filter-search" placeholder="&#128269; Buscar por cliente o DNI..." style="padding: 8px 12px; border: 1px solid #bdc3c7; border-radius: 6px; min-width: 220px; font-size: 0.9rem;">
-                <select id="filter-tramo" style="padding: 8px 12px; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 0.9rem; cursor: pointer;">
-                    <option value="todos">Todos los clientes</option>
+                <input type="text" id="filter-search" placeholder="&#128269; Buscar cliente, DNI o caserío..." style="padding: 8px 12px; border: 1px solid #bdc3c7; border-radius: 6px; min-width: 210px; font-size: 0.88rem;">
+                
+                <select id="filter-distrito" style="padding: 8px 12px; border: 1px solid #27ae60; border-radius: 6px; font-size: 0.88rem; cursor: pointer; font-weight: 600; color: #1e8449; background: #eafaf1;">
+                    <option value="todos">&#128205; Todos los Distritos (Ruta de Campo)</option>
+                </select>
+
+                <select id="filter-tramo" style="padding: 8px 12px; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 0.88rem; cursor: pointer;">
+                    <option value="todos">Todos los clientes del mes</option>
                     <option value="sin-llamar-mora">&#128680; En Mora SIN LLAMAR (Urgente)</option>
+                    <option value="promesas-hoy">&#128176; Con Promesa de Pago Hoy / Vencida</option>
+                    <option value="falta-foto-urgente">&#128248; Urgente Tomar Foto / Carta</option>
+                    <option value="reincidentes">&#128260; Clientes Reincidentes en Mora</option>
                     <option value="nuevos-mora">&#9888; Nuevos que entraron en Mora</option>
                     <option value="preventiva-urgente">&#9200; Vencen Hoy o en 1 a 3 días</option>
                     <option value="en-mora">Todos en Mora (&ge; 1 día)</option>
@@ -80,7 +147,8 @@
                     <option value="tramo-otro">Mayor a 30 días</option>
                     <option value="al-dia">Al día / Preventiva (0 días)</option>
                 </select>
-                <select id="filter-estado" style="padding: 8px 12px; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 0.9rem; cursor: pointer;">
+
+                <select id="filter-estado" style="padding: 8px 12px; border: 1px solid #bdc3c7; border-radius: 6px; font-size: 0.88rem; cursor: pointer;">
                     <option value="todos">Todos los estados</option>
                     <option value="pendiente">Solo Pendientes de Pago</option>
                     <option value="cancelo">Solo Cancelados</option>
@@ -95,7 +163,7 @@
                     <thead>
                         <tr>
                             <th>DNI</th>
-                            <th>Cliente</th>
+                            <th>Cliente / Ubicación (Campo)</th>
                             <th>Teléfono</th>
                             <th>Contactar</th>
                             <th>Producto</th>
@@ -103,16 +171,16 @@
                             <th>Vencimiento</th>
                             <th>Días Mora Actual</th>
                             <th>Días Mora Cierre</th>
-                            <th>Tramo de Visita</th>
-                            <th>Compromiso de Pago</th>
+                            <th>Tramo de Visita y Fechas</th>
+                            <th>Compromiso y Fecha de Pago</th>
                             <th>Monto Adeudado</th>
-                            <th>Carta</th>
+                            <th>Carta / Foto</th>
                             <th>Estado</th>
                         </tr>
                     </thead>
                     <tbody id="table-body">
                         <tr>
-                            <td colspan="14" class="empty-state">No hay datos para mostrar. Sube un archivo Excel para comenzar.</td>
+                            <td colspan="14" class="empty-state">No hay clientes cargados en este mes. Sube el archivo Excel de la semana para comenzar.</td>
                         </tr>
                     </tbody>
                 </table>
@@ -120,6 +188,6 @@
         </section>
     </div>
 
-    <script src="app.js?v=24"></script>
+    <script src="app.js?v=27"></script>
 </body>
 </html>

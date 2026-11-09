@@ -215,3 +215,168 @@ tr.row-urgente-sin-llamar:hover {
 tr.row-nuevo-mora {
     border-left: 4px solid #e74c3c;
 }
+
+/* Selector de Meses del Año */
+.months-section {
+    background: #f8f9fa;
+    border: 1px solid #dce4ec;
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 20px;
+}
+
+.months-tabs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(95px, 1fr));
+    gap: 8px;
+}
+
+.month-tab {
+    padding: 9px 6px;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #334155;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+}
+
+.month-tab:hover {
+    background: #eaf2f8;
+    border-color: #3498db;
+}
+
+.month-tab.active {
+    background: #2980b9;
+    color: #ffffff;
+    border-color: #1f6391;
+    box-shadow: 0 2px 6px rgba(41, 128, 185, 0.35);
+}
+
+.month-tab.has-data::after {
+    content: "";
+    width: 7px;
+    height: 7px;
+    background: #27ae60;
+    border-radius: 50%;
+    position: absolute;
+    top: 4px;
+    right: 4px;
+}
+
+.month-tab.active.has-data::after {
+    background: #f1c40f;
+}
+
+/* Modal de Acta de Mora */
+.acta-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 9999;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    overflow-y: auto;
+    padding: 30px 15px;
+}
+
+.acta-modal-content {
+    background: white;
+    width: 100%;
+    max-width: 780px;
+    border-radius: 10px;
+    padding: 25px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+}
+
+.acta-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-bottom: 18px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #eee;
+}
+
+.acta-sheet {
+    border: 2px solid #2c3e50;
+    padding: 22px;
+    border-radius: 6px;
+    margin-bottom: 24px;
+    background: #fff;
+    color: #222;
+    page-break-inside: avoid;
+}
+
+.acta-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px solid #27ae60;
+    padding-bottom: 10px;
+    margin-bottom: 15px;
+}
+
+.acta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 18px;
+    font-size: 0.9rem;
+    margin-bottom: 15px;
+}
+
+.acta-box {
+    background: #f8f9fa;
+    border: 1px solid #dce4ec;
+    padding: 10px 12px;
+    border-radius: 5px;
+    margin-bottom: 14px;
+    font-size: 0.9rem;
+}
+
+.acta-firmas {
+    display: flex;
+    justify-content: space-around;
+    margin-top: 45px;
+    padding-top: 10px;
+    text-align: center;
+    font-size: 0.85rem;
+}
+
+.acta-firma-linea {
+    width: 220px;
+    border-top: 1px solid #333;
+    padding-top: 6px;
+}
+
+@media print {
+    body * {
+        visibility: hidden;
+    }
+    #acta-modal, #acta-modal * {
+        visibility: visible;
+    }
+    #acta-modal {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        background: none;
+        padding: 0;
+    }
+    .acta-modal-content {
+        box-shadow: none;
+        max-width: 100%;
+        padding: 0;
+    }
+    .no-print {
+        display: none !important;
+    }
+}
