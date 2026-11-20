@@ -26,23 +26,89 @@ function tieneCompromisoValido(comp) {
     return str !== "" && str !== "-";
 }
 
-// Permite guardar y recuperar la fecha de promesa incluso desde el texto sincronizado en la nube [PROM:YYYY-MM-DD]
+// Permite guardar y recuperar la fecha de promesa [PROM:YYYY-MM-DD] y teléfonos [TEL:tel1|tel2] desde la nube
 function extraerFechaPromesaDeTexto(comp) {
     const str = String(comp || "");
     const match = str.match(/\[PROM:(\d{4}-\d{2}-\d{2})\]/);
     return match ? match[1] : "";
 }
 
-function limpiarTextoCompromiso(comp) {
-    return String(comp || "").replace(/\s*\[PROM:\d{4}-\d{2}-\d{2}\]/g, "").trim();
+function extraerTelefonosDeTexto(comp) {
+    const str = String(comp || "");
+    const match = str.match(/\[TEL:([^\|\]]*)\|([^\]]*)\]/);
+    if (!match) return { tel1: "", tel2: "" };
+    return {
+        tel1: match[1].trim(),
+        tel2: match[2].trim()
+    };
 }
 
-function empacarCompromisoConFecha(textoLimpio, fechaPromesa) {
+function limpiarTextoCompromiso(comp) {
+    return String(comp || "")
+        .replace(/\s*\[PROM:\d{4}-\d{2}-\d{2}\]/g, "")
+        .replace(/\s*\[TEL:[^\]]*\]/g, "")
+        .trim();
+}
+
+function empacarCompromisoConMetadatos(textoLimpio, fechaPromesa, tel1 = "", tel2 = "") {
     const limpio = limpiarTextoCompromiso(textoLimpio);
+    let resultado = limpio || "-";
     if (fechaPromesa) {
-        return `${limpio || "-"} [PROM:${fechaPromesa}]`;
+        resultado += ` [PROM:${fechaPromesa}]`;
     }
-    return limpio;
+    const safeTel1 = String(tel1 || "").replace(/[\[\]\|]/g, "").trim();
+    const safeTel2 = String(tel2 || "").replace(/[\[\]\|]/g, "").trim();
+    if (safeTel1 || safeTel2) {
+        resultado += ` [TEL:${safeTel1}|${safeTel2}]`;
+    }
+    return resultado;
+}
+
+// Directorio global de teléfonos por DNI (persiste en todos los meses y semanas)
+function obtenerDirectorioTelefonos() {
+    try {
+        const raw = localStorage.getItem("mora_telefonos_clientes");
+        if (raw) {
+            return JSON.parse(raw) || {};
+        }
+    } catch (e) {}
+    return {};
+}
+
+function guardarEnDirectorioTelefonos(dni, tel1, tel2) {
+    const dniKey = String(dni || "").trim();
+    if (!dniKey || dniKey === "-") return;
+    try {
+        const dir = obtenerDirectorioTelefonos();
+        dir[dniKey] = {
+            tel1: String(tel1 || "").trim(),
+            tel2: String(tel2 || "").trim(),
+            updatedAt: Date.now()
+        };
+        localStorage.setItem("mora_telefonos_clientes", JSON.stringify(dir));
+    } catch (e) {
+        console.error("Error guardando directorio de teléfonos:", e);
+    }
+}
+
+function obtenerTelefonosDeCliente(dni, celularExcel = "") {
+    const dniKey = String(dni || "").trim();
+    const dir = obtenerDirectorioTelefonos();
+    const guardadoGlobal = dir[dniKey] || {};
+    const guardadoMes = gestionesMesActual[dniKey] || {};
+
+    const tel1Personalizado = guardadoMes.tel1 || guardadoGlobal.tel1 || "";
+    const tel2Personalizado = guardadoMes.tel2 !== undefined && guardadoMes.tel2 !== "" ? guardadoMes.tel2 : (guardadoGlobal.tel2 || "");
+
+    const telPrincipalMostrar = tel1Personalizado || celularExcel || "-";
+    const fueEditadoPrincipal = Boolean(tel1Personalizado && tel1Personalizado !== celularExcel);
+
+    return {
+        telPrincipal: telPrincipalMostrar,
+        tel1Personalizado,
+        tel2: tel2Personalizado,
+        fueEditadoPrincipal
+    };
 }
 
 function parsearFechaSegura(valor) {
@@ -111,7 +177,7 @@ function cargarGestionesLocalesMes(claveMes = obtenerClaveMes()) {
             }
             for (let i = 0; i < localStorage.length; i++) {
                 const key = localStorage.key(i);
-                if (key && key.startsWith("mora_") && !key.startsWith("mora_cached_") && !key.startsWith("mora_gestiones_") && !key.startsWith("mora_rows_") && !key.startsWith("mora_clientes_")) {
+                if (key && key.startsWith("mora_") && !key.startsWith("mora_cached_") && !key.startsWith("mora_gestiones_") && !key.startsWith("mora_rows_") && !key.startsWith("mora_clientes_") && !key.startsWith("mora_telefonos_")) {
                     const dni = key.replace("mora_", "").trim();
                     try {
                         const val = JSON.parse(localStorage.getItem(key));
@@ -140,12 +206,24 @@ function extraerGestionesNubeParaMes(nubeAll, claveMes = obtenerClaveMes()) {
 
     Object.keys(nubeAll).forEach(rawKey => {
         const keyStr = String(rawKey).trim();
+        const itemNube = nubeAll[rawKey] || {};
+        const dniLimpiado = keyStr.includes("__") ? keyStr.split("__")[0] : keyStr;
+
+        // Si en la nube viene algún teléfono guardado en cualquier mes, enriquecer el directorio global
+        const telsNube = extraerTelefonosDeTexto(itemNube.compromiso);
+        if (telsNube.tel1 || telsNube.tel2) {
+            const dirActual = obtenerDirectorioTelefonos()[dniLimpiado];
+            if (!dirActual || (!dirActual.tel1 && !dirActual.tel2)) {
+                guardarEnDirectorioTelefonos(dniLimpiado, telsNube.tel1, telsNube.tel2);
+            }
+        }
+
         if (keyStr.endsWith(sufijoMes)) {
             const dni = keyStr.slice(0, -sufijoMes.length);
-            resultadoNubeMes[dni] = nubeAll[rawKey];
+            resultadoNubeMes[dni] = itemNube;
         } else if (!keyStr.includes("__") && (claveMes === mesHoyClave || claveMes === "2026-10")) {
             if (!resultadoNubeMes[keyStr]) {
-                resultadoNubeMes[keyStr] = nubeAll[rawKey];
+                resultadoNubeMes[keyStr] = itemNube;
             }
         }
     });
@@ -155,6 +233,7 @@ function extraerGestionesNubeParaMes(nubeAll, claveMes = obtenerClaveMes()) {
 
 function fusionarGestiones(nubeGestiones, localGestiones) {
     const resultado = {};
+    const dirTelefonos = obtenerDirectorioTelefonos();
     const dnis = new Set([
         ...Object.keys(nubeGestiones || {}),
         ...Object.keys(localGestiones || {})
@@ -164,12 +243,23 @@ function fusionarGestiones(nubeGestiones, localGestiones) {
         const dni = String(rawDni).trim();
         const nube = (nubeGestiones && nubeGestiones[rawDni]) || {};
         const local = (localGestiones && localGestiones[dni]) || {};
+        const dirTel = dirTelefonos[dni] || {};
 
         const nubeCompRaw = String(nube.compromiso || "").trim();
         const localCompRaw = String(local.compromiso || "").trim();
 
         const fechaPromNube = extraerFechaPromesaDeTexto(nubeCompRaw);
         const fechaPromLocal = local.fechaPromesa || extraerFechaPromesaDeTexto(localCompRaw);
+
+        const telsNube = extraerTelefonosDeTexto(nubeCompRaw);
+        const telsLocalRaw = extraerTelefonosDeTexto(localCompRaw);
+
+        const tel1Final = local.tel1 || dirTel.tel1 || telsLocalRaw.tel1 || telsNube.tel1 || "";
+        const tel2Final = local.tel2 || dirTel.tel2 || telsLocalRaw.tel2 || telsNube.tel2 || "";
+
+        if (tel1Final || tel2Final) {
+            guardarEnDirectorioTelefonos(dni, tel1Final, tel2Final);
+        }
 
         const nubeComp = limpiarTextoCompromiso(nubeCompRaw);
         const localComp = limpiarTextoCompromiso(localCompRaw);
@@ -180,6 +270,8 @@ function fusionarGestiones(nubeGestiones, localGestiones) {
             resultado[dni] = {
                 compromiso: compFinal,
                 fechaPromesa: fechaPromFinal,
+                tel1: tel1Final,
+                tel2: tel2Final,
                 carta1: local.carta1 !== undefined ? Boolean(local.carta1) : Boolean(nube.carta1),
                 carta2: local.carta2 !== undefined ? Boolean(local.carta2) : Boolean(nube.carta2),
                 estado: local.estado || nube.estado || "pendiente",
@@ -195,6 +287,8 @@ function fusionarGestiones(nubeGestiones, localGestiones) {
             resultado[dni] = {
                 compromiso: compFinal,
                 fechaPromesa: fechaPromFinal,
+                tel1: tel1Final,
+                tel2: tel2Final,
                 carta1: Boolean(nube.carta1 || local.carta1),
                 carta2: Boolean(nube.carta2 || local.carta2),
                 estado: (nube.estado && nube.estado !== "pendiente") ? nube.estado : (local.estado || nube.estado || "pendiente"),
@@ -233,56 +327,210 @@ function obtenerMesesReincidencia(dniKey, claveMesActual = obtenerClaveMes()) {
     return mesesPrevios;
 }
 
-// Convierte cualquier matriz de filas (con o sin cabecera) en una lista de objetos de clientes de Jhunior Vargas
-function extraerClientesDeFilas(rows) {
+// Normaliza textos de cabeceras (quita tildes, saltos de línea, guiones bajos y espacios dobles)
+function normalizarHeader(str) {
+    return String(str || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[_\-\r\n\t]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+// Verifica si una celda menciona a Jhunior Vargas Gordon en cualquiera de sus variantes
+function textoEsJhuniorVargas(texto) {
+    if (!texto) return false;
+    const s = String(texto)
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase()
+        .replace(/[_\-\r\n\t,]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    return (
+        (s.includes("JHUNIOR") && s.includes("VARGAS")) ||
+        (s.includes("JUNIOR") && s.includes("VARGAS")) ||
+        (s.includes("VARGAS") && s.includes("GORDON")) ||
+        (s.includes("VIGNER") && s.includes("VARGAS")) ||
+        (s.includes("ZANDER") && s.includes("VARGAS")) ||
+        s.includes("JVARGASG") ||
+        s.includes("J. VARGAS") ||
+        s.includes("J VARGAS G")
+    );
+}
+
+function buscarColumna(headers, exactNames = [], partialNames = [], excludeNames = []) {
+    let idx = headers.findIndex(h => exactNames.includes(h));
+    if (idx !== -1) return idx;
+    idx = headers.findIndex(h => {
+        if (!h) return false;
+        if (excludeNames.some(ex => h.includes(ex))) return false;
+        return partialNames.some(p => h.includes(p));
+    });
+    return idx;
+}
+
+// Convierte cualquier matriz de filas (con o sin cabecera) en una lista de objetos de clientes de Jhunior Vargas Gordon
+function extraerClientesDeFilas(rows, permitirFallbackSinAsesor = true) {
     if (!rows || !Array.isArray(rows) || rows.length === 0) return [];
 
     if (rows[0] && !Array.isArray(rows[0]) && typeof rows[0] === "object" && rows[0].dni !== undefined) {
         return rows;
     }
 
-    let hasHeader = false;
-    let headerRowIndex = 0;
-    for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    // 1. Detectar si hay filas que mencionen directamente a JHUNIOR VARGAS GORDON (ej. "JHUNIOR VARGAS GORDON - TRUJILLO")
+    let primeraFilaJhuniorIdx = -1;
+    let colAsesorDetectadaEnDatos = -1;
+    for (let i = 0; i < rows.length; i++) {
         if (!Array.isArray(rows[i])) continue;
-        const rowStrings = rows[i].map(c => String(c).toUpperCase().trim());
-        if (rowStrings.includes("CLIENTE") || rowStrings.includes("NOMBRE CLIENTE") || rowStrings.includes("NOMBRE_CLIENTE")) {
-            headerRowIndex = i;
-            hasHeader = true;
+        const cIdx = rows[i].findIndex(cell => textoEsJhuniorVargas(cell));
+        if (cIdx !== -1) {
+            primeraFilaJhuniorIdx = i;
+            colAsesorDetectadaEnDatos = cIdx;
             break;
         }
     }
 
-    let idxCliente, idxVencimiento, idxMonto, idxCompromiso, idxAsesor, idxProceso, idxDiasMora, idxDiasMoraCierre, idxDni, idxCelular, idxAmortizacion, idxProducto, idxCuotas, idxAgencia, idxDireccion, idxDistrito, idxOrganizacion;
+    let hasHeader = false;
+    let headerRowIndex = 0;
+    let mejorScoreCabecera = 0;
+    const limiteBusquedaCabecera = primeraFilaJhuniorIdx > 0 ? primeraFilaJhuniorIdx : Math.min(rows.length, 100);
+
+    // 2. Buscar la fila de cabecera antes de la primera fila de datos
+    for (let i = 0; i < limiteBusquedaCabecera; i++) {
+        if (!Array.isArray(rows[i])) continue;
+        // Nunca tomar como cabecera una fila que ya contiene "JHUNIOR VARGAS GORDON"
+        if (rows[i].some(cell => textoEsJhuniorVargas(cell))) continue;
+
+        const rowNorm = rows[i].map(c => normalizarHeader(c)).filter(Boolean);
+        if (rowNorm.length < 2) continue;
+
+        let score = 0;
+        const tieneOficialExacto = rowNorm.some(h => h.includes("oficial negocios") || h.includes("oficial de negocios") || h === "asesor" || h === "oficial");
+        const tieneClienteExacto = rowNorm.some(h => h === "nombre cliente" || h === "cliente" || h.includes("nombre cliente") || h.includes("nom cliente") || h.includes("apellidos y nombres") || h.includes("razon social") || h === "titular");
+        const tieneColDoc = rowNorm.some(h => h.includes("documento") || h.includes("dni") || h.includes("nro doc") || h.includes("num doc"));
+        const tieneColMoraOSaldo = rowNorm.some(h => h.includes("mora") || h.includes("atraso") || h.includes("saldo") || h.includes("monto") || h.includes("vencimiento") || h.includes("producto"));
+
+        if (tieneOficialExacto) score += 4;
+        if (tieneClienteExacto) score += 3;
+        if (tieneColDoc) score += 2;
+        if (tieneColMoraOSaldo) score += 2;
+
+        if (score >= 3 && score > mejorScoreCabecera) {
+            mejorScoreCabecera = score;
+            headerRowIndex = i;
+            hasHeader = true;
+        }
+    }
+
+    // Si encontramos filas de Jhunior Vargas a partir de la fila 1 o posterior y aún no marcamos cabecera, usar la fila anterior no vacía como cabecera
+    if (!hasHeader && primeraFilaJhuniorIdx > 0) {
+        for (let i = primeraFilaJhuniorIdx - 1; i >= 0; i--) {
+            if (Array.isArray(rows[i]) && rows[i].filter(c => String(c).trim() !== "").length >= 3) {
+                headerRowIndex = i;
+                hasHeader = true;
+                break;
+            }
+        }
+    }
+
+    let idxCliente = -1, idxVencimiento = -1, idxMonto = -1, idxCompromiso = -1, idxAsesor = -1, idxProceso = -1, idxDiasMora = -1, idxDiasMoraCierre = -1, idxDni = -1, idxCelular = -1, idxAmortizacion = -1, idxProducto = -1, idxCuotas = -1, idxDireccion = -1, idxDistrito = -1, idxOrganizacion = -1;
     let dataRows;
 
     if (hasHeader) {
-        const headers = rows[headerRowIndex].map(h => String(h).toLowerCase().trim());
+        const headers = rows[headerRowIndex].map(h => normalizarHeader(h));
         dataRows = rows.slice(headerRowIndex + 1);
 
-        const findExact = (exactNames) => headers.findIndex(h => exactNames.includes(h));
+        idxCliente = buscarColumna(
+            headers,
+            ["nombre cliente", "cliente", "nombres", "apellidos y nombres", "nombre del cliente", "nom cliente", "razon social", "titular", "socio"],
+            ["nombre cliente", "nom cliente", "apellidos y nombres", "nombre del cliente", "cliente", "titular", "razon social", "nombres"],
+            ["codigo", "cod ", "tipo", "id "]
+        );
+        idxVencimiento = buscarColumna(
+            headers,
+            ["fecha de vencimiento", "fecha vencimiento", "vencimiento", "fec vencimiento", "fec venc", "fecha compromiso"],
+            ["vencimiento", "fec venc", "fecha compromiso"]
+        );
+        idxMonto = buscarColumna(
+            headers,
+            ["saldo inicial", "saldo capital", "saldo deuda", "monto adeudado", "saldo actual", "saldo", "monto", "capital", "deuda total"],
+            ["saldo inicial", "saldo capital", "monto adeudado", "saldo actual", "saldo", "monto", "capital"]
+        );
+        idxCompromiso = buscarColumna(
+            headers,
+            ["compromiso de pago", "compromiso"],
+            ["compromiso"],
+            ["fecha", "fec"]
+        );
+        idxAsesor = buscarColumna(
+            headers,
+            ["oficial negocios actual", "oficial de negocios actual", "asesor actual", "oficial negocios", "oficial de negocios", "asesor", "oficial", "analista", "asesor de negocios", "ejecutivo"],
+            ["oficial negocios actual", "oficial de negocios", "oficial negocios", "asesor", "oficial", "analista", "ejecutivo"]
+        );
+        idxProceso = buscarColumna(
+            headers,
+            ["fecha de proceso", "fecha proceso", "fec proceso", "proceso", "fecha corte", "fecha de corte", "fec corte"],
+            ["fecha de proceso", "fecha proceso", "fec proceso", "fecha corte", "proceso"]
+        );
+        idxDiasMora = buscarColumna(
+            headers,
+            ["dias de mora actual", "dias mora actual", "das mora actual", "mora actual", "dias de mora", "dias mora", "dias atraso", "dias de atraso"],
+            ["mora actual", "dias de mora actual", "dias mora", "dias de mora", "dias atraso", "dias de atraso", "mora"],
+            ["cierre", "proyect", "tramo", "rango", "inicio"]
+        );
+        idxDiasMoraCierre = buscarColumna(
+            headers,
+            ["dias de mora al cierre", "dias mora al cierre", "dias mora cierre", "das mora cierre", "mora cierre", "mora al cierre"],
+            ["mora al cierre", "mora cierre", "cierre"]
+        );
+        idxDni = buscarColumna(
+            headers,
+            ["numero documento", "nro documento", "dni", "documento", "num doc", "nro doc", "doc identidad", "documento identidad"],
+            ["numero documento", "nro documento", "doc identidad", "dni", "documento", "nro doc", "num doc"],
+            ["tipo"]
+        );
+        idxCelular = buscarColumna(
+            headers,
+            ["celular 3", "celular", "telefono", "telefono principal", "celular 1", "celular 2", "telefono 1", "nro celular", "tel celular"],
+            ["celular", "telefono", "telef", "movil", "fono"]
+        );
+        idxAmortizacion = buscarColumna(
+            headers,
+            ["amortizacion", "amortizado", "monto amortizado", "pagos", "abono"],
+            ["amortiz", "abono", "monto pagado"]
+        );
+        idxProducto = buscarColumna(
+            headers,
+            ["producto trt", "producto", "subproducto", "tipo producto", "cultivo"],
+            ["producto", "cultivo"],
+            ["cod"]
+        );
+        idxCuotas = buscarColumna(
+            headers,
+            ["nro cuotas", "n° cuotas", "n cuotas", "numero cuotas", "cuotas", "nro cuota", "cuota"],
+            ["cuota"]
+        );
+        idxDireccion = buscarColumna(
+            headers,
+            ["direccion", "direccion predio", "direccion / caserio", "caserio", "sector", "domicilio", "ubicacion"],
+            ["direccion", "caserio", "sector", "domicilio"]
+        );
+        idxDistrito = buscarColumna(
+            headers,
+            ["distrito", "distrito predio", "ubigeo distrito"],
+            ["distrito"]
+        );
+        idxOrganizacion = buscarColumna(
+            headers,
+            ["organizacion", "asociacion", "junta", "comision"],
+            ["organizacion", "asociacion", "junta"]
+        );
 
-        idxCliente = findExact(["nombre_cliente", "nombre cliente", "cliente"]);
-        idxVencimiento = findExact(["fecha compromiso", "vencimiento", "fecha de vencimiento", "fecha_vencimiento"]);
-        idxMonto = findExact(["saldo inicial", "monto adeudado", "monto"]);
-        idxCompromiso = findExact(["compromiso", "compromiso de pago"]);
-        idxAsesor = findExact(["oficial negocios actual", "asesor"]);
-        idxProceso = findExact(["fecha de proceso", "proceso", "fecha_proceso"]);
-        idxDiasMora = findExact(["dias de mora actual", "días mora actual", "das mora actual", "mora actual", "dias_mora_actual"]);
-        idxDiasMoraCierre = findExact(["dias de mora al cierre", "días mora cierre", "das mora cierre", "mora cierre"]);
-        idxDni = findExact(["numero_documento", "numero documento", "dni", "documento"]);
-        idxCelular = findExact(["celular_3", "telefono", "teléfono", "celular"]);
-        idxAmortizacion = findExact(["amortizacion", "amortización"]);
-        idxProducto = findExact(["producto_trt", "producto"]);
-        idxCuotas = findExact(["nro cuotas", "cuotas", "n° cuotas"]);
-        idxAgencia = findExact(["agencia"]);
-        idxDireccion = findExact(["direccion", "dirección", "direccion_predio", "caserio", "sector"]);
-        idxDistrito = findExact(["distrito", "distrito_predio"]);
-        idxOrganizacion = findExact(["organizacion", "organización", "asociacion", "junta"]);
-
-        if (idxCliente === -1) idxCliente = 0;
-        if (idxVencimiento === -1) idxVencimiento = 1;
-        if (idxMonto === -1) idxMonto = 2;
+        if (idxAsesor === -1 && colAsesorDetectadaEnDatos !== -1) {
+            idxAsesor = colAsesorDetectadaEnDatos;
+        }
         if (idxDireccion === -1 && rows[headerRowIndex].length > 27) idxDireccion = 24;
         if (idxDistrito === -1 && rows[headerRowIndex].length > 27) idxDistrito = 27;
         if (idxOrganizacion === -1 && rows[headerRowIndex].length > 29) idxOrganizacion = 29;
@@ -291,11 +539,10 @@ function extraerClientesDeFilas(rows) {
         idxProceso = 0;
         idxDiasMora = 2;
         idxDiasMoraCierre = 3;
-        idxAgencia = 7;
         idxMonto = 8;
         idxCliente = 9;
         idxProducto = 14;
-        idxAsesor = 15;
+        idxAsesor = colAsesorDetectadaEnDatos !== -1 ? colAsesorDetectadaEnDatos : 15;
         idxDni = 19;
         idxCelular = 22;
         idxDireccion = 24;
@@ -307,21 +554,85 @@ function extraerClientesDeFilas(rows) {
         idxCompromiso = -1;
     }
 
-    let datosFiltrados = dataRows.filter(row => Array.isArray(row) && row.length > 0 && row.some(cell => cell !== ""));
+    let datosNoVacios = dataRows.filter(row => Array.isArray(row) && row.length > 0 && row.some(cell => String(cell).trim() !== ""));
 
-    if (idxAsesor !== -1 || idxAgencia !== -1) {
-        datosFiltrados = datosFiltrados.filter(row => {
-            const asesor = idxAsesor !== -1 ? String(row[idxAsesor] || "").toUpperCase() : "";
-            const agencia = idxAgencia !== -1 ? String(row[idxAgencia] || "").toUpperCase() : "";
-            const matchAsesor = idxAsesor === -1 || (asesor.includes("JHUNIOR") && asesor.includes("VARGAS"));
-            const matchAgencia = idxAgencia === -1 || agencia.includes("NORTE");
-            return matchAsesor && matchAgencia;
-        });
+    // Nivel 1: Filtrar por la columna detectada de Oficial Negocios Actual (ej. "JHUNIOR VARGAS GORDON - TRUJILLO")
+    let filasJhunior = [];
+    if (idxAsesor !== -1) {
+        filasJhunior = datosNoVacios.filter(row => textoEsJhuniorVargas(row[idxAsesor]));
     }
 
-    return datosFiltrados.map(row => {
-        const dni = String(idxDni !== -1 ? (row[idxDni] || "-") : "-").trim();
-        const cliente = String(row[idxCliente] || "-").trim();
+    // Nivel 2: Si la columna idxAsesor no dio resultados (o hay varias columnas de oficial), buscar en TODAS las celdas de cada fila
+    if (filasJhunior.length === 0) {
+        filasJhunior = datosNoVacios.filter(row => row.some(cell => textoEsJhuniorVargas(cell)));
+    }
+
+    let esCoincidenciaDirectaJhunior = filasJhunior.length > 0;
+    let datosFiltrados = filasJhunior;
+
+    // Nivel 3: Si el archivo ya viene pre-filtrado sin columna de otros asesores (ej. Excel propio o exportado)
+    if (datosFiltrados.length === 0 && permitirFallbackSinAsesor) {
+        const tieneOtrosAsesores = idxAsesor !== -1 && datosNoVacios.some(row => {
+            const val = String(row[idxAsesor] || "").trim();
+            return val.length > 5 && !textoEsJhuniorVargas(val);
+        });
+        if (!tieneOtrosAsesores && hasHeader) {
+            datosFiltrados = datosNoVacios.filter(row => {
+                const cli = idxCliente !== -1 ? String(row[idxCliente] || "").trim() : "";
+                const dniVal = idxDni !== -1 ? String(row[idxDni] || "").trim() : "";
+                if (!cli && !dniVal) return false;
+                const cliUpper = cli.toUpperCase();
+                if (cliUpper === "TOTAL" || cliUpper === "TOTALES" || cliUpper === "CLIENTE" || cliUpper === "NOMBRE_CLIENTE") return false;
+                return true;
+            });
+        }
+    }
+
+    if (datosFiltrados.length === 0) return [];
+
+    // Si alguna columna clave no se encontró por nombre de cabecera (o la tabla empieza en la columna B/C), autodetectarla en la primera fila de Jhunior
+    const filaMuestra = datosFiltrados[0];
+    if (filaMuestra && Array.isArray(filaMuestra)) {
+        if (idxDni === -1 || String(filaMuestra[idxDni] || "").trim() === "") {
+            const autoDni = filaMuestra.findIndex((c, idx) => idx !== idxAsesor && /^\d{7,8}$/.test(String(c || "").trim()));
+            if (autoDni !== -1) idxDni = autoDni;
+        }
+        if (idxCelular === -1 || String(filaMuestra[idxCelular] || "").trim() === "") {
+            const autoCel = filaMuestra.findIndex((c, idx) => idx !== idxAsesor && idx !== idxDni && /^9\d{8}$/.test(String(c || "").replace(/\D/g, "")));
+            if (autoCel !== -1) idxCelular = autoCel;
+        }
+        if (idxCliente === -1 || String(filaMuestra[idxCliente] || "").trim() === "") {
+            // Buscar columna con nombre de persona (texto largo con letras y espacios que no sea el asesor ni la agencia)
+            const autoCli = filaMuestra.findIndex((c, idx) => {
+                if (idx === idxAsesor || idx === idxDni || idx === idxCelular || idx === idxProducto || idx === idxDistrito) return false;
+                const str = String(c || "").trim();
+                return str.length >= 6 && /[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}\s+[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}/.test(str) && !textoEsJhuniorVargas(str) && !str.toUpperCase().includes("NORTE");
+            });
+            if (autoCli !== -1) idxCliente = autoCli;
+        }
+        if (idxMonto === -1) {
+            idxMonto = 2;
+        }
+    }
+
+    return datosFiltrados.map((row, indexFila) => {
+        let dni = String(idxDni !== -1 ? (row[idxDni] || "") : "").trim();
+        let cliente = String(idxCliente !== -1 ? (row[idxCliente] || "") : "").trim();
+
+        // Respaldo por fila si la celda de DNI o Cliente estuviera vacía
+        if (!dni || dni === "-") {
+            const celdaDni = row.find((c, idx) => idx !== idxAsesor && /^\d{7,8}$/.test(String(c || "").trim()));
+            dni = celdaDni ? String(celdaDni).trim() : `SIN-DNI-${indexFila + 1}`;
+        }
+        if (!cliente || cliente === "-") {
+            const celdaCli = row.find((c, idx) => {
+                if (idx === idxAsesor) return false;
+                const str = String(c || "").trim();
+                return str.length >= 5 && /[A-Za-zÁÉÍÓÚÑáéíóúñ]+\s+[A-Za-zÁÉÍÓÚÑáéíóúñ]+/.test(str) && !textoEsJhuniorVargas(str);
+            });
+            cliente = celdaCli ? String(celdaCli).trim() : `Cliente #${indexFila + 1}`;
+        }
+
         const celular = String(idxCelular !== -1 ? (row[idxCelular] || "-") : "-").trim();
         const producto = String(idxProducto !== -1 ? (row[idxProducto] || "-") : "-").trim();
         const cuotas = String(idxCuotas !== -1 ? (row[idxCuotas] || "-") : "-").trim();
@@ -333,8 +644,12 @@ function extraerClientesDeFilas(rows) {
         const fechaBase = parsearFechaSegura(procesoRaw);
         const procesoISO = fechaBase ? `${fechaBase.getFullYear()}-${String(fechaBase.getMonth() + 1).padStart(2, "0")}-${String(fechaBase.getDate()).padStart(2, "0")}` : null;
 
+        const vencRaw = idxVencimiento !== -1 ? row[idxVencimiento] : null;
+        const fechaVencDirecta = parsearFechaSegura(vencRaw);
+        const vencimientoISO = fechaVencDirecta ? `${fechaVencDirecta.getFullYear()}-${String(fechaVencDirecta.getMonth() + 1).padStart(2, "0")}-${String(fechaVencDirecta.getDate()).padStart(2, "0")}` : null;
+
         const compromisoExcel = idxCompromiso !== -1 ? String(row[idxCompromiso] || "-") : "-";
-        const montoOriginal = parseFloat(String(row[idxMonto]).replace(/[^0-9.-]+/g, "")) || 0;
+        const montoOriginal = idxMonto !== -1 ? (parseFloat(String(row[idxMonto]).replace(/[^0-9.-]+/g, "")) || 0) : 0;
         const amortizacion = idxAmortizacion !== -1 ? (parseFloat(String(row[idxAmortizacion]).replace(/[^0-9.-]+/g, "")) || 0) : 0;
         const diasAtrasoExcel = idxDiasMora !== -1 && row[idxDiasMora] !== "" ? (parseInt(row[idxDiasMora], 10) || 0) : 0;
         const diasAtrasoCierre = idxDiasMoraCierre !== -1 && row[idxDiasMoraCierre] !== "" ? (parseInt(row[idxDiasMoraCierre], 10) || 0) : "-";
@@ -349,11 +664,13 @@ function extraerClientesDeFilas(rows) {
             distrito,
             organizacion,
             procesoISO,
+            vencimientoISO,
             compromisoExcel,
             montoOriginal,
             amortizacion,
             diasAtrasoExcel,
-            diasAtrasoCierre
+            diasAtrasoCierre,
+            esCoincidenciaDirectaJhunior
         };
     });
 }
@@ -425,7 +742,9 @@ function fusionarClientesSemanaEnMes(clientesPreviosMes, clientesNuevoExcel, cla
                     gest.llamado || false,
                     gest.fechaLlamada || "",
                     true,
-                    claveMes
+                    claveMes,
+                    gest.tel1,
+                    gest.tel2
                 );
             }
         }
@@ -671,19 +990,40 @@ function handleFile(e) {
         const data = new Uint8Array(ev.target.result);
         const workbook = XLSX.read(data, { type: "array", cellDates: true });
 
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-
-        let rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
-        
         try {
             const claveMes = obtenerClaveMes();
             const locales = cargarGestionesLocalesMes(claveMes);
             gestionesMesActual = fusionarGestiones(gestionesMesActual, locales);
 
-            const clientesNuevosExcel = extraerClientesDeFilas(rows);
+            let clientesNuevosExcel = [];
+            let rows = [];
+
+            // 1. Primero buscamos en todas las hojas del Excel aquellas que tengan explícitamente a Jhunior Vargas Gordon
+            for (const sheetName of workbook.SheetNames) {
+                const ws = workbook.Sheets[sheetName];
+                const sheetRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+                const extraidosJhunior = extraerClientesDeFilas(sheetRows, false);
+                if (extraidosJhunior.length > clientesNuevosExcel.length) {
+                    clientesNuevosExcel = extraidosJhunior;
+                    rows = sheetRows;
+                }
+            }
+
+            // 2. Si ninguna hoja menciona explícitamente el nombre del asesor (ej. archivo ya filtrado previamente), probar modo flexible
             if (clientesNuevosExcel.length === 0) {
-                alert("No se encontraron clientes de Jhunior Vargas en este archivo Excel.");
+                for (const sheetName of workbook.SheetNames) {
+                    const ws = workbook.Sheets[sheetName];
+                    const sheetRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+                    const extraidosFlex = extraerClientesDeFilas(sheetRows, true);
+                    if (extraidosFlex.length > clientesNuevosExcel.length) {
+                        clientesNuevosExcel = extraidosFlex;
+                        rows = sheetRows;
+                    }
+                }
+            }
+
+            if (clientesNuevosExcel.length === 0) {
+                alert("No se encontraron clientes de Jhunior Vargas Gordon en ninguna hoja de este archivo Excel.");
                 statusEl.textContent = "Sin clientes encontrados en el Excel.";
                 statusEl.style.color = "#e74c3c";
                 e.target.value = "";
@@ -727,7 +1067,7 @@ async function sincronizarPendientesConNube() {
     const locales = cargarGestionesLocalesMes(claveMes);
     const pendientes = Object.entries(locales).filter(([_, val]) => val && val.dirty);
     for (const [dni, val] of pendientes) {
-        await enviarGestionANube(dni, val.compromiso, val.fechaPromesa, val.carta1, val.carta2, val.estado, val.llamado, val.fechaLlamada, claveMes);
+        await enviarGestionANube(dni, val.compromiso, val.fechaPromesa, val.carta1, val.carta2, val.estado, val.llamado, val.fechaLlamada, claveMes, val.tel1, val.tel2);
     }
 }
 
@@ -760,7 +1100,6 @@ async function syncData(retryCount = 0) {
         const rowsNube = json.data || [];
         let clientesMes = obtenerClientesGuardadosDelMes(claveMes);
 
-        // Si existen clientes pero les faltaba extraer distrito/dirección, enriquecerlos desde rowsNube
         if (rowsNube.length > 0 && Array.isArray(rowsNube[0])) {
             const extraidosNube = extraerClientesDeFilas(rowsNube);
             if (extraidosNube.length > 0) {
@@ -775,7 +1114,6 @@ async function syncData(retryCount = 0) {
                     guardarClientesDelMes(mesHoyClave, extraidosNube);
                     clientesMes = extraidosNube;
                 } else if (clientesMes && clientesMes.some(c => c.distrito === undefined)) {
-                    // Enriquecer con distrito y dirección
                     const mapaNube = new Map(extraidosNube.map(c => [String(c.dni).trim(), c]));
                     clientesMes = clientesMes.map(c => {
                         const n = mapaNube.get(String(c.dni).trim());
@@ -817,13 +1155,24 @@ async function syncData(retryCount = 0) {
     }
 }
 
-function guardarGestionLocalInmediato(dni, compromiso, fechaPromesa, carta1, carta2, estado, llamado = false, fechaLlamada = "", dirty = true, claveMes = obtenerClaveMes()) {
+function guardarGestionLocalInmediato(dni, compromiso, fechaPromesa, carta1, carta2, estado, llamado = false, fechaLlamada = "", dirty = true, claveMes = obtenerClaveMes(), tel1 = undefined, tel2 = undefined) {
     const dniKey = String(dni).trim();
     const prev = gestionesMesActual[dniKey] || {};
+    const dirTel = obtenerDirectorioTelefonos()[dniKey] || {};
     const textoLimpio = limpiarTextoCompromiso(compromiso);
+
+    const tel1Final = tel1 !== undefined ? String(tel1).trim() : (prev.tel1 !== undefined ? prev.tel1 : (dirTel.tel1 || ""));
+    const tel2Final = tel2 !== undefined ? String(tel2).trim() : (prev.tel2 !== undefined ? prev.tel2 : (dirTel.tel2 || ""));
+
+    if (tel1 !== undefined || tel2 !== undefined) {
+        guardarEnDirectorioTelefonos(dniKey, tel1Final, tel2Final);
+    }
+
     const registro = {
         compromiso: textoLimpio,
         fechaPromesa: fechaPromesa !== undefined ? fechaPromesa : (prev.fechaPromesa || ""),
+        tel1: tel1Final,
+        tel2: tel2Final,
         carta1: Boolean(carta1),
         carta2: Boolean(carta2),
         estado: estado || "pendiente",
@@ -843,10 +1192,15 @@ function guardarGestionLocalInmediato(dni, compromiso, fechaPromesa, carta1, car
     }
 }
 
-async function enviarGestionANube(dni, compromiso, fechaPromesa, carta1, carta2, estado, llamado = false, fechaLlamada = "", claveMes = obtenerClaveMes()) {
+async function enviarGestionANube(dni, compromiso, fechaPromesa, carta1, carta2, estado, llamado = false, fechaLlamada = "", claveMes = obtenerClaveMes(), tel1 = undefined, tel2 = undefined) {
     const dniKey = String(dni).trim();
+    const prev = gestionesMesActual[dniKey] || {};
+    const dirTel = obtenerDirectorioTelefonos()[dniKey] || {};
+    const tel1Final = tel1 !== undefined ? tel1 : (prev.tel1 || dirTel.tel1 || "");
+    const tel2Final = tel2 !== undefined ? tel2 : (prev.tel2 || dirTel.tel2 || "");
+
     const dniConMes = `${dniKey}__${claveMes}`;
-    const compromisoEmpacado = empacarCompromisoConFecha(compromiso, fechaPromesa);
+    const compromisoEmpacado = empacarCompromisoConMetadatos(compromiso, fechaPromesa, tel1Final, tel2Final);
 
     const url = new URL(SCRIPT_URL);
     url.searchParams.append("action", "update");
@@ -877,7 +1231,7 @@ async function enviarGestionANube(dni, compromiso, fechaPromesa, carta1, carta2,
             fetch(urlCompat.toString(), { method: "GET", mode: "no-cors", keepalive: true, cache: "no-store" });
         }
 
-        guardarGestionLocalInmediato(dniKey, compromiso, fechaPromesa, carta1, carta2, estado, llamado, fechaLlamada, false, claveMes);
+        guardarGestionLocalInmediato(dniKey, compromiso, fechaPromesa, carta1, carta2, estado, llamado, fechaLlamada, false, claveMes, tel1Final, tel2Final);
         return true;
     } catch(err) {
         console.error("Error guardando gestion en la nube:", err);
@@ -885,10 +1239,10 @@ async function enviarGestionANube(dni, compromiso, fechaPromesa, carta1, carta2,
     }
 }
 
-function updateGestionEnNube(dni, compromiso, fechaPromesa, carta1, carta2, estado, llamado = false, fechaLlamada = "", inmediato = false, statusBadge = null) {
+function updateGestionEnNube(dni, compromiso, fechaPromesa, carta1, carta2, estado, llamado = false, fechaLlamada = "", inmediato = false, statusBadge = null, tel1 = undefined, tel2 = undefined) {
     const dniKey = String(dni).trim();
     const claveMes = obtenerClaveMes();
-    guardarGestionLocalInmediato(dniKey, compromiso, fechaPromesa, carta1, carta2, estado, llamado, fechaLlamada, true, claveMes);
+    guardarGestionLocalInmediato(dniKey, compromiso, fechaPromesa, carta1, carta2, estado, llamado, fechaLlamada, true, claveMes, tel1, tel2);
 
     if (statusBadge) {
         statusBadge.textContent = `✓ Guardado (${NOMBRES_MESES[mesSeleccionado]})`;
@@ -902,12 +1256,26 @@ function updateGestionEnNube(dni, compromiso, fechaPromesa, carta1, carta2, esta
     }
 
     if (inmediato) {
-        enviarGestionANube(dniKey, compromiso, fechaPromesa, carta1, carta2, estado, llamado, fechaLlamada, claveMes);
+        enviarGestionANube(dniKey, compromiso, fechaPromesa, carta1, carta2, estado, llamado, fechaLlamada, claveMes, tel1, tel2);
     } else {
         saveTimers[timerKey] = setTimeout(() => {
-            enviarGestionANube(dniKey, compromiso, fechaPromesa, carta1, carta2, estado, llamado, fechaLlamada, claveMes);
+            enviarGestionANube(dniKey, compromiso, fechaPromesa, carta1, carta2, estado, llamado, fechaLlamada, claveMes, tel1, tel2);
         }, 400);
     }
+}
+
+function limpiarDigitosTelefono(valor) {
+    const digitos = String(valor || "").replace(/\D/g, "");
+    if (digitos.length === 11 && digitos.startsWith("51")) {
+        return digitos.slice(2);
+    }
+    return digitos;
+}
+
+function obtenerCodigoPaisWhatsapp(valor) {
+    const digitos = String(valor || "").replace(/\D/g, "");
+    if (digitos.length === 9) return "51" + digitos;
+    return digitos;
 }
 
 function renderizarClientesDelMes(listaClientes) {
@@ -941,16 +1309,25 @@ function renderizarClientesDelMes(listaClientes) {
         let monto = montoOriginal - amortizacion;
         if (monto < 0) monto = 0;
 
-        let fechaBase = parsearFechaSegura(c.procesoISO) || new Date(fechaFallback);
-        if (!fechaReporteDetectada && c.procesoISO) {
-            fechaReporteDetectada = fechaBase;
-        }
-
         const diasAtrasoExcel = parseInt(c.diasAtrasoExcel, 10) || 0;
         const diasAtrasoCierre = c.diasAtrasoCierre !== undefined ? c.diasAtrasoCierre : "-";
 
-        let fechaVenc = new Date(fechaBase.getFullYear(), fechaBase.getMonth(), fechaBase.getDate());
-        fechaVenc.setDate(fechaVenc.getDate() - diasAtrasoExcel);
+        let fechaBase = parsearFechaSegura(c.procesoISO);
+        let fechaVenc = parsearFechaSegura(c.vencimientoISO);
+
+        if (fechaBase) {
+            if (!fechaReporteDetectada) fechaReporteDetectada = fechaBase;
+            fechaVenc = new Date(fechaBase.getFullYear(), fechaBase.getMonth(), fechaBase.getDate());
+            fechaVenc.setDate(fechaVenc.getDate() - diasAtrasoExcel);
+        } else if (fechaVenc) {
+            fechaBase = new Date(fechaVenc.getFullYear(), fechaVenc.getMonth(), fechaVenc.getDate());
+            fechaBase.setDate(fechaBase.getDate() + diasAtrasoExcel);
+            if (!fechaReporteDetectada) fechaReporteDetectada = fechaBase;
+        } else {
+            fechaBase = new Date(fechaFallback);
+            fechaVenc = new Date(fechaBase.getFullYear(), fechaBase.getMonth(), fechaBase.getDate());
+            fechaVenc.setDate(fechaVenc.getDate() - diasAtrasoExcel);
+        }
 
         const diasTranscurridosDesdeReporte = Math.round((fechaCalculoMora.getTime() - fechaBase.getTime()) / (1000 * 60 * 60 * 24));
 
@@ -1129,32 +1506,13 @@ function renderizarClientesDelMes(listaClientes) {
         } else {
             textoWhatsapp += `cuenta con ${diasAtrasoMostrar} día(s) de atraso, porque venció el día ${fechaMostrada}. Por favor comunicarse conmigo de manera urgente para poder apoyarle.`;
         }
-        
-        let cleanPhone = String(celular).replace(/\D/g, "");
-        let phoneWithCode = cleanPhone.length === 9 ? "51" + cleanPhone : cleanPhone;
-        
-        let celularHTML = celular;
-        let botonesHTML = "";
-        if (cleanPhone.length >= 7) {
-            const urlWhatsapp = `https://wa.me/${phoneWithCode}?text=${encodeURIComponent(textoWhatsapp)}`;
-            botonesHTML = `
-                <div style="display:flex; gap:6px; justify-content:center; margin-bottom: 5px;">
-                    <a href="tel:${cleanPhone}" class="btn-accion-llamar" title="Llamar" style="text-decoration:none; background-color:#3498db; color:white; padding:5px 8px; border-radius:5px; font-size:0.85em; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.15);">&#128222; Llamar</a>
-                    <a href="${urlWhatsapp}" target="_blank" class="btn-accion-ws" title="WhatsApp" style="text-decoration:none; background-color:#25D366; color:white; padding:5px 8px; border-radius:5px; font-size:0.85em; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.15);">&#128172; WhatsApp</a>
-                </div>
-            `;
-        }
-
-        botonesHTML += `
-            <label class="llamado-label" style="display:inline-flex; align-items:center; gap:4px; font-size:0.78em; cursor:pointer; padding:2px 6px; border-radius:4px; background:#f1f2f6; color:#57606f;">
-                <input type="checkbox" class="llamado-chk"> <span class="llamado-text">Falta llamar</span>
-            </label>
-        `;
 
         const tr = document.createElement("tr");
         tr.dataset.dni = dni;
         tr.dataset.cliente = `${cliente} ${distrito} ${direccion}`.toLowerCase();
         tr.dataset.clienteNombre = String(cliente);
+        tr.dataset.celularExcel = String(celular || "-");
+        tr.dataset.textoWhatsappBase = textoWhatsapp;
         tr.dataset.distrito = distrito || "SIN DISTRITO";
         tr.dataset.tramo = tramoFilterKey;
         tr.dataset.enMora = diasAtrasoMostrar >= 1 ? "si" : "no";
@@ -1165,7 +1523,6 @@ function renderizarClientesDelMes(listaClientes) {
         tr.dataset.monto = monto;
         tr.dataset.montoOriginal = montoOriginal;
         tr.dataset.amortizacion = amortizacion;
-        tr.dataset.phoneWithCode = phoneWithCode;
         tr.dataset.finTramo1 = formatShortDate(fTramo1Fin);
 
         if (entroAMoraDespues) {
@@ -1178,8 +1535,25 @@ function renderizarClientesDelMes(listaClientes) {
                 <strong>${cliente}</strong>
                 ${ubicacionHTML}
             </td>
-            <td>${celularHTML}</td>
-            <td style="text-align:center;">${botonesHTML}</td>
+            <td class="telefono-td" style="min-width: 145px;">
+                <div class="telefono-vista"></div>
+                <div class="telefono-editor" style="display:none; background:#f8f9fa; border:1px solid #bdc3c7; border-radius:6px; padding:6px; margin-top:4px;">
+                    <div style="font-size:0.72em; font-weight:bold; color:#2c3e50; margin-bottom:2px;">&#128241; Tel. Principal:</div>
+                    <input type="text" class="input-tel1" placeholder="Ej: 987654321" style="width:100%; padding:4px 6px; border:1px solid #3498db; border-radius:4px; font-size:0.82em; margin-bottom:5px;">
+                    <div style="font-size:0.72em; font-weight:bold; color:#8e44ad; margin-bottom:2px;">&#10133; Tel. Adicional / Familiar:</div>
+                    <input type="text" class="input-tel2" placeholder="Ej: 912345678 (Esposa)" style="width:100%; padding:4px 6px; border:1px solid #9b59b6; border-radius:4px; font-size:0.82em; margin-bottom:6px;">
+                    <div style="display:flex; gap:4px; justify-content:space-between;">
+                        <button type="button" class="btn-guardar-tel" style="flex:1; background:#27ae60; color:white; border:none; padding:4px 6px; border-radius:4px; font-size:0.75em; font-weight:bold; cursor:pointer;">&#128190; Guardar</button>
+                        <button type="button" class="btn-cancelar-tel" style="background:#95a5a6; color:white; border:none; padding:4px 8px; border-radius:4px; font-size:0.75em; font-weight:bold; cursor:pointer;">&#10006;</button>
+                    </div>
+                </div>
+            </td>
+            <td style="text-align:center; min-width: 145px;">
+                <div class="botones-contacto-container"></div>
+                <label class="llamado-label" style="display:inline-flex; align-items:center; gap:4px; font-size:0.78em; cursor:pointer; padding:2px 6px; border-radius:4px; background:#f1f2f6; color:#57606f; margin-top:3px;">
+                    <input type="checkbox" class="llamado-chk"> <span class="llamado-text">Falta llamar</span>
+                </label>
+            </td>
             <td>${producto}</td>
             <td>${cuotas}</td>
             <td>${fechaMostrada}</td>
@@ -1189,16 +1563,16 @@ function renderizarClientesDelMes(listaClientes) {
                 <div>${tramoStr}</div>
                 ${tramosFechasHTML}
             </td>
-            <td style="min-width: 185px;">
+            <td style="min-width: 190px;">
                 <div style="display:flex; align-items:center; gap:4px; margin-bottom:4px;">
                     <span style="font-size:0.74em; color:#555; font-weight:bold;">&#128197; Promesa:</span>
                     <input type="date" class="fecha-promesa-input" style="padding:3px 5px; border:1px solid #bdc3c7; border-radius:4px; font-size:0.78em; flex:1; cursor:pointer;">
                 </div>
                 <div class="promesa-alerta-badge" style="display:none; font-size:0.73em; padding:2px 5px; border-radius:4px; margin-bottom:4px; font-weight:bold;"></div>
                 <input type="text" class="compromiso-input" value="${limpiarTextoCompromiso(compromisoExcel)}" placeholder="Apunta el compromiso aquí...">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:3px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; flex-wrap:wrap; gap:4px;">
                     <div class="save-badge" style="font-size: 0.72em; color: #27ae60; min-height: 14px; opacity: 0; transition: opacity 0.2s;"></div>
-                    ${cleanPhone.length >= 7 ? `<button type="button" class="btn-recordar-promesa" style="background:#f39c12; color:white; border:none; padding:2px 7px; border-radius:4px; font-size:0.72em; font-weight:bold; cursor:pointer;" title="Enviar recordatorio de compromiso por WhatsApp">&#128242; Recordar Pago</button>` : ""}
+                    <div class="recordar-pago-container" style="display:flex; gap:4px;"></div>
                 </div>
             </td>
             <td style="${montoStyle}">${montoHTML}</td>
@@ -1256,24 +1630,36 @@ function renderizarClientesDelMes(listaClientes) {
         if (tr.querySelector(".empty-state")) return;
         const tds = tr.querySelectorAll("td");
         const dni = String(tds[0].innerText).trim();
-        
-        const btnLlamar = tds[3].querySelector(".btn-accion-llamar");
-        const btnWs = tds[3].querySelector(".btn-accion-ws");
+        const celularExcel = tr.dataset.celularExcel || "-";
+        const textoWhatsappBase = tr.dataset.textoWhatsappBase || "";
+
+        // Elementos de Teléfono
+        const telVista = tds[2].querySelector(".telefono-vista");
+        const telEditor = tds[2].querySelector(".telefono-editor");
+        const inputTel1 = tds[2].querySelector(".input-tel1");
+        const inputTel2 = tds[2].querySelector(".input-tel2");
+        const btnGuardarTel = tds[2].querySelector(".btn-guardar-tel");
+        const btnCancelarTel = tds[2].querySelector(".btn-cancelar-tel");
+
+        // Elementos de Contacto
+        const contenedorBotonesContacto = tds[3].querySelector(".botones-contacto-container");
         const chkLlamado = tds[3].querySelector(".llamado-chk");
         const txtLlamado = tds[3].querySelector(".llamado-text");
         const lblLlamado = tds[3].querySelector(".llamado-label");
 
+        // Elementos de Compromiso y Promesa
         const inputFechaProm = tds[10].querySelector(".fecha-promesa-input");
         const badgePromesa = tds[10].querySelector(".promesa-alerta-badge");
         const inputComp = tds[10].querySelector(".compromiso-input");
         const saveBadge = tds[10].querySelector(".save-badge");
-        const btnRecordarProm = tds[10].querySelector(".btn-recordar-promesa");
+        const contenedorRecordarPago = tds[10].querySelector(".recordar-pago-container");
 
         const badgeFoto = tds[12].querySelector(".alerta-foto-badge");
         const chks = tds[12].querySelectorAll("input[type='checkbox']");
         const selectEst = tds[13].querySelector("select");
         
         const saved = gestionesMesActual[dni];
+        let fechaLlamadaActual = (saved && saved.fechaLlamada) ? saved.fechaLlamada : "";
 
         const actualizarAlertasVisualesFila = (estaLlamado, fechaStr = "") => {
             chkLlamado.checked = estaLlamado;
@@ -1348,7 +1734,162 @@ function renderizarClientesDelMes(listaClientes) {
             }
         };
 
-        let fechaLlamadaActual = (saved && saved.fechaLlamada) ? saved.fechaLlamada : "";
+        const registrarContacto = (forzarLlamado = null, inmediato = true) => {
+            const estadoLlamado = forzarLlamado !== null ? forzarLlamado : (chkLlamado.checked || tieneCompromisoValido(inputComp.value) || Boolean(inputFechaProm.value));
+            if (estadoLlamado && !fechaLlamadaActual) {
+                fechaLlamadaActual = obtenerFechaHoraCorta();
+            }
+            if (forzarLlamado === true && !tieneCompromisoValido(inputComp.value)) {
+                inputComp.value = `Llamado ${fechaLlamadaActual}`;
+            }
+            actualizarAlertasVisualesFila(estadoLlamado, fechaLlamadaActual);
+            updateGestionEnNube(dni, inputComp.value, inputFechaProm.value, chks[0].checked, chks[1].checked, selectEst.value, estadoLlamado, fechaLlamadaActual, inmediato, saveBadge);
+            recalcularResumen();
+            aplicarFiltrosTabla();
+        };
+
+        const abrirRecordatorioWhatsapp = (codigoPaisTel) => {
+            const nombreCli = tr.dataset.clienteNombre || "Cliente";
+            const montoCli = `$${(parseFloat(tr.dataset.monto || "0") || 0).toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            const fPromTexto = inputFechaProm.value ? `el día ${formatearISOaCorto(inputFechaProm.value)}` : "en la fecha acordada";
+            const notaComp = tieneCompromisoValido(inputComp.value) ? ` (${inputComp.value})` : "";
+            const msg = `Hola Sr(a). ${nombreCli}, le saluda Jhunior Vargas, asesor de negocios de Agrobanco. Le escribo para recordarle su compromiso de pago acordado para ${fPromTexto}${notaComp} por el monto de ${montoCli}. Quedo atento al envío de su voucher de pago para registrar su abono. Muchas gracias.`;
+            const url = `https://wa.me/${codigoPaisTel}?text=${encodeURIComponent(msg)}`;
+            registrarContacto(true, true);
+            window.open(url, "_blank");
+        };
+
+        // Renderiza dinámicamente la celda de Teléfono, los botones de Llamar/WhatsApp y los botones de Recordar Pago
+        const renderizarTelefonosYBotonesFila = () => {
+            const infoTel = obtenerTelefonosDeCliente(dni, celularExcel);
+            const tel1Display = infoTel.telPrincipal || "-";
+            const tel2Display = infoTel.tel2 || "";
+
+            const cleanTel1 = limpiarDigitosTelefono(tel1Display);
+            const codeTel1 = obtenerCodigoPaisWhatsapp(cleanTel1);
+
+            const cleanTel2 = limpiarDigitosTelefono(tel2Display);
+            const codeTel2 = obtenerCodigoPaisWhatsapp(cleanTel2);
+
+            tr.dataset.telPrincipalExport = tel1Display;
+            tr.dataset.telAdicionalExport = tel2Display;
+
+            // 1. Vista de la columna Teléfono
+            let htmlVistaTel = `<div style="font-weight: 600; color: #2c3e50;">&#128241; ${tel1Display}</div>`;
+            if (infoTel.fueEditadoPrincipal && celularExcel && celularExcel !== "-") {
+                htmlVistaTel += `<div style="font-size: 0.7em; color: #27ae60; font-weight: bold;">✓ Actualizado <span style="color:#95a5a6; font-weight:normal;">(Excel: ${celularExcel})</span></div>`;
+            }
+            if (tel2Display) {
+                htmlVistaTel += `<div style="font-size: 0.82em; color: #8e44ad; font-weight: 600; margin-top: 3px; background: #f5eef8; padding: 2px 5px; border-radius: 4px; border-left: 3px solid #9b59b6;">&#128222; 2do: ${tel2Display}</div>`;
+            }
+            htmlVistaTel += `
+                <button type="button" class="btn-abrir-editor-tel" style="margin-top: 4px; background: #eaf2f8; color: #2980b9; border: 1px solid #a9cce3; padding: 2px 7px; border-radius: 4px; font-size: 0.72em; font-weight: bold; cursor: pointer;">
+                    &#9998; ${tel2Display ? "Editar Teléfonos" : "Editar / +Otro Tel."}
+                </button>
+            `;
+            telVista.innerHTML = htmlVistaTel;
+
+            const btnAbrirEditor = telVista.querySelector(".btn-abrir-editor-tel");
+            if (btnAbrirEditor) {
+                btnAbrirEditor.addEventListener("click", () => {
+                    inputTel1.value = tel1Display !== "-" ? tel1Display : "";
+                    inputTel2.value = tel2Display;
+                    telVista.style.display = "none";
+                    telEditor.style.display = "block";
+                    inputTel1.focus();
+                });
+            }
+
+            // 2. Botones de Llamar y WhatsApp (Tel 1 y Tel 2 si existe)
+            let htmlBotones = "";
+            const tieneSegundoValido = cleanTel2.length >= 7;
+
+            if (cleanTel1.length >= 7) {
+                const urlWs1 = `https://wa.me/${codeTel1}?text=${encodeURIComponent(textoWhatsappBase)}`;
+                const sufijo1 = tieneSegundoValido ? " 1" : "";
+                htmlBotones += `
+                    <div style="display:flex; gap:5px; justify-content:center; margin-bottom: 4px;">
+                        <a href="tel:${cleanTel1}" class="btn-accion-llamar" title="Llamar a ${tel1Display}" style="text-decoration:none; background-color:#3498db; color:white; padding:4px 8px; border-radius:5px; font-size:0.82em; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.12);">&#128222; Llamar${sufijo1}</a>
+                        <a href="${urlWs1}" target="_blank" class="btn-accion-ws" title="WhatsApp a ${tel1Display}" style="text-decoration:none; background-color:#25D366; color:white; padding:4px 8px; border-radius:5px; font-size:0.82em; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.12);">&#128172; WhatsApp${sufijo1}</a>
+                    </div>
+                `;
+            }
+
+            if (tieneSegundoValido) {
+                const urlWs2 = `https://wa.me/${codeTel2}?text=${encodeURIComponent(textoWhatsappBase)}`;
+                htmlBotones += `
+                    <div style="display:flex; gap:5px; justify-content:center; margin-bottom: 4px;">
+                        <a href="tel:${cleanTel2}" class="btn-accion-llamar" title="Llamar al 2do número: ${tel2Display}" style="text-decoration:none; background-color:#8e44ad; color:white; padding:4px 8px; border-radius:5px; font-size:0.78em; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.12);">&#128222; Llamar 2</a>
+                        <a href="${urlWs2}" target="_blank" class="btn-accion-ws" title="WhatsApp al 2do número: ${tel2Display}" style="text-decoration:none; background-color:#16a085; color:white; padding:4px 8px; border-radius:5px; font-size:0.78em; font-weight:bold; box-shadow:0 2px 4px rgba(0,0,0,0.12);">&#128172; WhatsApp 2</a>
+                    </div>
+                `;
+            }
+
+            contenedorBotonesContacto.innerHTML = htmlBotones;
+
+            contenedorBotonesContacto.querySelectorAll(".btn-accion-llamar, .btn-accion-ws").forEach(btn => {
+                btn.addEventListener("click", () => registrarContacto(true, true));
+            });
+
+            // 3. Botones de Recordar Pago por WhatsApp
+            let htmlRecordar = "";
+            if (cleanTel1.length >= 7) {
+                htmlRecordar += `<button type="button" class="btn-recordar-1" style="background:#f39c12; color:white; border:none; padding:2px 7px; border-radius:4px; font-size:0.72em; font-weight:bold; cursor:pointer;" title="Enviar recordatorio de pago al Tel. Principal (${tel1Display})">&#128242; Recordar${tieneSegundoValido ? " 1" : " Pago"}</button>`;
+            }
+            if (tieneSegundoValido) {
+                htmlRecordar += `<button type="button" class="btn-recordar-2" style="background:#8e44ad; color:white; border:none; padding:2px 7px; border-radius:4px; font-size:0.72em; font-weight:bold; cursor:pointer;" title="Enviar recordatorio de pago al 2do Teléfono (${tel2Display})">&#128242; Tel. 2</button>`;
+            }
+            contenedorRecordarPago.innerHTML = htmlRecordar;
+
+            const btnRec1 = contenedorRecordarPago.querySelector(".btn-recordar-1");
+            if (btnRec1) btnRec1.addEventListener("click", () => abrirRecordatorioWhatsapp(codeTel1));
+            const btnRec2 = contenedorRecordarPago.querySelector(".btn-recordar-2");
+            if (btnRec2) btnRec2.addEventListener("click", () => abrirRecordatorioWhatsapp(codeTel2));
+        };
+
+        // Eventos del editor de teléfonos
+        const guardarCambiosTelefono = () => {
+            const nuevoTel1 = inputTel1.value.trim() || celularExcel || "-";
+            const nuevoTel2 = inputTel2.value.trim();
+
+            guardarEnDirectorioTelefonos(dni, nuevoTel1, nuevoTel2);
+            updateGestionEnNube(
+                dni,
+                inputComp.value,
+                inputFechaProm.value,
+                chks[0].checked,
+                chks[1].checked,
+                selectEst.value,
+                chkLlamado.checked,
+                fechaLlamadaActual,
+                true,
+                saveBadge,
+                nuevoTel1,
+                nuevoTel2
+            );
+
+            telEditor.style.display = "none";
+            telVista.style.display = "block";
+            renderizarTelefonosYBotonesFila();
+        };
+
+        btnGuardarTel.addEventListener("click", guardarCambiosTelefono);
+        btnCancelarTel.addEventListener("click", () => {
+            telEditor.style.display = "none";
+            telVista.style.display = "block";
+        });
+        inputTel1.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") {
+                ev.preventDefault();
+                guardarCambiosTelefono();
+            }
+        });
+        inputTel2.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") {
+                ev.preventDefault();
+                guardarCambiosTelefono();
+            }
+        });
 
         if (saved) {
             if (saved.compromiso !== undefined && saved.compromiso !== "") {
@@ -1365,29 +1906,11 @@ function renderizarClientesDelMes(listaClientes) {
             }
         }
 
+        renderizarTelefonosYBotonesFila();
+
         const yaFueContactado = Boolean((saved && saved.llamado) || tieneCompromisoValido(inputComp.value) || Boolean(inputFechaProm.value));
         actualizarAlertasVisualesFila(yaFueContactado, fechaLlamadaActual);
 
-        const registrarContacto = (forzarLlamado = null, inmediato = true) => {
-            const estadoLlamado = forzarLlamado !== null ? forzarLlamado : (chkLlamado.checked || tieneCompromisoValido(inputComp.value) || Boolean(inputFechaProm.value));
-            if (estadoLlamado && !fechaLlamadaActual) {
-                fechaLlamadaActual = obtenerFechaHoraCorta();
-            }
-            if (forzarLlamado === true && !tieneCompromisoValido(inputComp.value)) {
-                inputComp.value = `Llamado ${fechaLlamadaActual}`;
-            }
-            actualizarAlertasVisualesFila(estadoLlamado, fechaLlamadaActual);
-            updateGestionEnNube(dni, inputComp.value, inputFechaProm.value, chks[0].checked, chks[1].checked, selectEst.value, estadoLlamado, fechaLlamadaActual, inmediato, saveBadge);
-            recalcularResumen();
-            aplicarFiltrosTabla();
-        };
-
-        if (btnLlamar) {
-            btnLlamar.addEventListener("click", () => registrarContacto(true, true));
-        }
-        if (btnWs) {
-            btnWs.addEventListener("click", () => registrarContacto(true, true));
-        }
         chkLlamado.addEventListener("change", () => {
             if (!chkLlamado.checked && inputComp.value.startsWith("Llamado ")) {
                 inputComp.value = "-";
@@ -1405,19 +1928,6 @@ function renderizarClientesDelMes(listaClientes) {
             recalcularResumen();
             aplicarFiltrosTabla();
         });
-
-        if (btnRecordarProm) {
-            btnRecordarProm.addEventListener("click", () => {
-                const nombreCli = tr.dataset.clienteNombre || "Cliente";
-                const montoCli = `$${(parseFloat(tr.dataset.monto || "0") || 0).toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-                const fPromTexto = inputFechaProm.value ? `el día ${formatearISOaCorto(inputFechaProm.value)}` : "en la fecha acordada";
-                const notaComp = tieneCompromisoValido(inputComp.value) ? ` (${inputComp.value})` : "";
-                const msg = `Hola Sr(a). ${nombreCli}, le saluda Jhunior Vargas, asesor de negocios de Agrobanco. Le escribo para recordarle su compromiso de pago acordado para ${fPromTexto}${notaComp} por el monto de ${montoCli}. Quedo atento al envío de su voucher de pago para registrar su abono. Muchas gracias.`;
-                const url = `https://wa.me/${tr.dataset.phoneWithCode}?text=${encodeURIComponent(msg)}`;
-                registrarContacto(true, true);
-                window.open(url, "_blank");
-            });
-        }
 
         inputComp.addEventListener("input", () => {
             const tieneComp = tieneCompromisoValido(inputComp.value);
@@ -1462,7 +1972,7 @@ function renderizarClientesDelMes(listaClientes) {
     btnExport.style.display = "inline-block";
     btnExport.onclick = () => {
         const ws_data = [];
-        ws_data.push(["Mes", "DNI", "Cliente", "Distrito", "Dirección / Caserío", "Teléfono", "Contactado", "Producto", "N° Cuotas", "Vencimiento", "Días Mora Actual", "Días Mora Cierre", "Tramo de Visita", "Fechas Tramo 0-8 días", "Fechas Tramo 9-30 días", "Fecha Promesa Pago", "Compromiso de Pago", "Monto Adeudado", "Carta 1 a 8 días", "Carta 9 a 30 días", "Estado"]);
+        ws_data.push(["Mes", "DNI", "Cliente", "Distrito", "Dirección / Caserío", "Teléfono Principal", "Teléfono Adicional", "Contactado", "Producto", "N° Cuotas", "Vencimiento", "Días Mora Actual", "Días Mora Cierre", "Tramo de Visita", "Fechas Tramo 0-8 días", "Fechas Tramo 9-30 días", "Fecha Promesa Pago", "Compromiso de Pago", "Monto Adeudado", "Carta 1 a 8 días", "Carta 9 a 30 días", "Estado"]);
         
         const rowsToExport = document.querySelectorAll("#table-body tr");
         rowsToExport.forEach(tr => {
@@ -1473,7 +1983,8 @@ function renderizarClientesDelMes(listaClientes) {
             const cli = tr.dataset.clienteNombre || tds[1].innerText.split("\n")[0].trim();
             const dist = tr.dataset.distrito || "";
             const dir = tds[1].innerText.split("\n")[1] || "";
-            const tel = tds[2].innerText.trim();
+            const tel1 = tr.dataset.telPrincipalExport || tds[2].innerText.trim();
+            const tel2 = tr.dataset.telAdicionalExport || "";
             const chkLlam = tds[3].querySelector(".llamado-chk");
             const contactado = (chkLlam && chkLlam.checked) ? "Sí" : "No";
             const prod = tds[4].innerText.trim();
@@ -1494,7 +2005,7 @@ function renderizarClientesDelMes(listaClientes) {
             const c2 = chks[1].checked ? "Sí" : "No";
             const est = tds[13].querySelector("select").value;
             
-            ws_data.push([obtenerNombreMesAnio(), dni, cli, dist, dir, tel, contactado, prod, cuo, ven, ma, mc, tram, f0a8, f9a30, fProm, comp, monto, c1, c2, est]);
+            ws_data.push([obtenerNombreMesAnio(), dni, cli, dist, dir, tel1, tel2, contactado, prod, cuo, ven, ma, mc, tram, f0a8, f9a30, fProm, comp, monto, c1, c2, est]);
         });
         
         const ws = XLSX.utils.aoa_to_sheet(ws_data);
